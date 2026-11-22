@@ -70,6 +70,20 @@ struct FieldMaximizeCameraRestore {
     target_view_size: Option<Vec2>,
 }
 
+/// Result of ticking one output's camera for a frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CameraTick {
+    /// The source camera is still easing toward its targets.
+    pub animating: bool,
+    /// A linked Field camera was snapped to follow the source this frame.
+    pub linked_changed: bool,
+}
+
+/// Sub-pixel tolerance for deciding a linked follower already matches the
+/// source-derived state. Mirroring is an involution in exact arithmetic, so
+/// this only absorbs float rounding; it never masks a real difference.
+const LINKED_EPSILON: f32 = 1e-3;
+
 /// Independent camera state keyed by Smithay output name.
 ///
 /// The collection owns no output/protocol objects and no rendering state;
@@ -262,28 +276,129 @@ impl OutputCameras {
             .map(|camera| (camera, returning))
     }
 
-    /// Every camera that may tick, as for [`Self::get_mut_for_tick`].
-    pub fn iter_for_tick(&mut self) -> impl Iterator<Item = (&mut Camera, bool)> {
-        let Self {
-            cameras,
-            fullscreen,
-            field_maximize,
-            cluster_locked,
-            pending_field_center: _,
-        } = self;
-        cameras.iter_mut().filter_map(move |(name, camera)| {
-            (allows_pan(fullscreen.get(name))
-                && !field_maximize.contains_key(name)
-                && !cluster_locked.contains(name))
-            .then_some((camera, fullscreen.contains_key(name)))
-        })
-    }
-
     pub fn view(&self, output_name: &str) -> Option<OutputView> {
         self.get(output_name).map(|camera| OutputView {
             center: Point::from((camera.center.x, camera.center.y)),
             scale: scale(camera),
         })
+    }
+
+    /// Ticks one output's camera, then - when a linked layout is supplied and
+    /// the source is a Field camera - snaps every other Field camera to the
+    /// source's zoom and a center that keeps the layout seam continuous, so
+    /// the monitors act as one wide viewport over the Field. Followers settle
+    /// immediately: live state, targets, and velocities are rewritten, so the
+    /// follower's own later ticks report no motion. Presentation cameras
+    /// (fullscreen, Field maximize, an open cluster) never follow and are
+    /// never followed, so their transitions stay monitor-local.
+    pub fn tick_output(
+        &mut self,
+        output_name: &str,
+        zoom: &halley_config::Zoom,
+        pan_decay_rate: f32,
+        dt: f32,
+        linked_layout: Option<&[(String, Point<i32, Logical>)]>,
+    ) -> CameraTick {
+        let mut outcome = CameraTick::default();
+        let Some((camera, fullscreen_returning)) = self.get_mut_for_tick(output_name) else {
+            return outcome;
+        };
+        outcome.animating =
+            crate::input::zoom::tick_camera(camera, fullscreen_returning, zoom, pan_decay_rate, dt)
+                .1;
+        let Some(layout) = linked_layout else {
+            return outcome;
+        };
+        // Only a Field camera leads the linked group; a presentation camera
+        // (a fullscreen exit pan, maximize, or cluster) moves alone.
+        if self.is_locked(output_name) {
+            return outcome;
+        }
+        let Some(source_loc) =
+            layout
+                .iter()
+                .find(|(name, _)| name == output_name)
+                .map(|(_, loc)| Vec2 {
+                    x: loc.x as f32,
+                    y: loc.y as f32,
+                })
+        else {
+            return outcome;
+        };
+        let Some(source) = self.cameras.get(output_name) else {
+            return outcome;
+        };
+        let source_scale = scale(source).max(f32::EPSILON);
+        let source_center = source.center;
+        let source_base = source.base_size;
+        for (name, loc) in layout {
+            if name == output_name || self.is_locked(name) {
+                continue;
+            }
+            let Some(camera) = self.cameras.get_mut(name) else {
+                continue;
+            };
+            let loc = Vec2 {
+                x: loc.x as f32,
+                y: loc.y as f32,
+            };
+            // Screen-space offset between the two layout rectangle centers:
+            // scaled by the shared zoom, the monitors keep tiling the Field
+            // exactly as they tile the desk. The offset is folded into one
+            // constant before it touches the source center so a clean layout
+            // grid at native zoom cancels exactly instead of rounding.
+            let offset = Vec2 {
+                x: source_loc.x
+                    + (loc.x - source_loc.x + (camera.base_size.x - source_base.x) / 2.0)
+                        / source_scale
+                    - loc.x,
+                y: source_loc.y
+                    + (loc.y - source_loc.y + (camera.base_size.y - source_base.y) / 2.0)
+                        / source_scale
+                    - loc.y,
+            };
+            let center = Vec2 {
+                x: source_center.x + offset.x,
+                y: source_center.y + offset.y,
+            };
+            let view_size = Vec2 {
+                x: (camera.base_size.x / source_scale).max(1.0),
+                y: (camera.base_size.y / source_scale).max(1.0),
+            };
+            let settled = (center.x - camera.center.x).abs() < LINKED_EPSILON
+                && (center.y - camera.center.y).abs() < LINKED_EPSILON
+                && (view_size.x - camera.view_size.x).abs() < LINKED_EPSILON
+                && (view_size.y - camera.view_size.y).abs() < LINKED_EPSILON;
+            if !settled {
+                camera.center = center;
+                camera.target_center = center;
+                camera.view_size = view_size;
+                camera.target_view_size = view_size;
+                camera.pan_vel = Vec2 { x: 0.0, y: 0.0 };
+                camera.zoom_log_vel = 0.0;
+                outcome.linked_changed = true;
+            }
+        }
+        outcome
+    }
+
+    /// Ticks every camera that may tick and returns whether any camera is
+    /// still animating or was moved by linked propagation.
+    pub fn tick_all_outputs(
+        &mut self,
+        zoom: &halley_config::Zoom,
+        pan_decay_rate: f32,
+        dt: f32,
+        linked_layout: Option<&[(String, Point<i32, Logical>)]>,
+    ) -> bool {
+        let names: Vec<String> = self.cameras.keys().cloned().collect();
+        names
+            .into_iter()
+            .map(|name| {
+                let outcome = self.tick_output(&name, zoom, pan_decay_rate, dt, linked_layout);
+                outcome.animating || outcome.linked_changed
+            })
+            .fold(false, |animating, moved| animating || moved)
     }
 
     /// Parks the Field camera while a cluster workspace is presented.
@@ -618,6 +733,146 @@ fn camera_at_rest(output_size: Size<i32, Physical>) -> Camera {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linked_tick_pans_and_zooms_across_the_layout_seam() {
+        let mut cameras = OutputCameras::default();
+        let left: Rectangle<i32, Logical> = Rectangle::new((-1200, 100).into(), (1200, 800).into());
+        let right: Rectangle<i32, Logical> = Rectangle::new((0, 100).into(), (800, 800).into());
+        cameras.insert("left".into(), (1200, 800).into());
+        cameras.insert("right".into(), (800, 800).into());
+        let layout = [
+            ("left".to_string(), left.loc),
+            ("right".to_string(), right.loc),
+        ];
+        let zoom = halley_config::Zoom::default();
+        let source = cameras.get_mut("left").unwrap();
+        source.pan_target(Vec2 { x: 40.0, y: -20.0 });
+        source.zoom_inject_velocity(-1.0, zoom.step, zoom.smooth_rate);
+
+        let tick = cameras.tick_output("left", &zoom, 6.0, 0.016, Some(&layout));
+        let left_view = cameras.view("left").unwrap();
+        let right_view = cameras.view("right").unwrap();
+        assert!(tick.linked_changed);
+        assert!(left_view.scale < 1.0);
+        assert!((left_view.scale - right_view.scale).abs() < 1e-6);
+        assert!(left_view.center.x > 600.0);
+        assert!(left_view.center.y < 400.0);
+        let left_center = global_center(left_view.center, left);
+        let right_center = global_center(right_view.center, right);
+        assert!((left_center.y - right_center.y).abs() < 1e-4);
+        assert!(((right_center.x - left_center.x) * left_view.scale - 1000.0).abs() < 1e-4);
+        let right_camera = cameras.get("right").unwrap();
+        assert_eq!(right_camera.center, right_camera.target_center);
+        assert_eq!(right_camera.view_size, right_camera.target_view_size);
+        assert!(
+            !cameras
+                .tick_output("right", &zoom, 6.0, 0.016, Some(&layout))
+                .linked_changed
+        );
+    }
+
+    #[test]
+    fn linked_pan_applies_the_same_delta_from_either_output() {
+        let mut cameras = OutputCameras::default();
+        let layout: [(String, Point<i32, Logical>); 2] = [
+            ("left".into(), (0, 0).into()),
+            ("right".into(), (800, 0).into()),
+        ];
+        let zoom = halley_config::Zoom::default();
+        for (name, _) in &layout {
+            cameras.insert(name.clone(), (800, 600).into());
+        }
+        for name in ["right", "left"] {
+            cameras
+                .get_mut(name)
+                .unwrap()
+                .pan_target(Vec2 { x: 50.0, y: -25.0 });
+            cameras.tick_output(name, &zoom, 6.0, 0.02, Some(&layout));
+            assert_eq!(cameras.view("left"), cameras.view("right"));
+            // Nothing remains to be mirrored later by the follower's own clock.
+            cameras.get_mut(name).unwrap().snap_targets_to_live();
+        }
+        assert!(cameras.view("left").unwrap().center.x > 400.0);
+        assert!(cameras.view("left").unwrap().center.y < 300.0);
+    }
+
+    #[test]
+    fn linked_motion_leaves_presentation_cameras_and_restores_untouched() {
+        let mut cameras = OutputCameras::default();
+        let layout: [(String, Point<i32, Logical>); 4] = [
+            ("field".into(), (0, 0).into()),
+            ("full".into(), (800, 0).into()),
+            ("max".into(), (1600, 0).into()),
+            ("cluster".into(), (2400, 0).into()),
+        ];
+        for (name, _) in &layout {
+            cameras.insert(name.clone(), (800, 600).into());
+        }
+        let fullscreen = FullscreenCameraFrame {
+            center: (650.0, 350.0).into(),
+            progress: 0.7,
+            desired: false,
+            transition_active: true,
+        };
+        cameras.apply_fullscreen("full", Some(fullscreen));
+        cameras.apply_field_maximize("max", Some(1.0));
+        cameras.set_cluster_active("cluster", true);
+        let locked = ["full", "max", "cluster"];
+        let before = locked.map(|name| {
+            (
+                *cameras.get(name).unwrap(),
+                cameras.field_restore_view(name),
+            )
+        });
+        let zoom = halley_config::Zoom::default();
+        let source = cameras.get_mut("field").unwrap();
+        source.pan_target(Vec2 { x: 50.0, y: -25.0 });
+        source.zoom_inject_velocity(-1.0, zoom.step, zoom.smooth_rate);
+        assert!(
+            !cameras
+                .tick_output("field", &zoom, 6.0, 0.02, Some(&layout))
+                .linked_changed
+        );
+        assert_eq!(
+            before,
+            locked.map(|name| (
+                *cameras.get(name).unwrap(),
+                cameras.field_restore_view(name)
+            ))
+        );
+
+        let field = *cameras.get("field").unwrap();
+        cameras
+            .get_mut_for_pan("full")
+            .unwrap()
+            .pan_target(Vec2 { x: 60.0, y: 0.0 });
+        assert!(
+            cameras
+                .tick_output("full", &zoom, 6.0, 0.02, Some(&layout))
+                .animating
+        );
+        assert_ne!(cameras.get("full").unwrap().center, before[0].0.center);
+        assert_eq!(*cameras.get("field").unwrap(), field);
+        assert_eq!(cameras.field_restore_view("full"), before[0].1);
+    }
+
+    #[test]
+    fn camera_ticks_are_independent_without_linked_layout() {
+        let mut cameras = OutputCameras::default();
+        for name in ["left", "right"] {
+            cameras.insert(name.into(), (800, 600).into());
+        }
+        let before = *cameras.get("right").unwrap();
+        cameras
+            .get_mut("left")
+            .unwrap()
+            .pan_target(Vec2 { x: 50.0, y: 0.0 });
+        let tick = cameras.tick_output("left", &halley_config::Zoom::default(), 6.0, 0.02, None);
+        assert!(tick.animating);
+        assert!(!tick.linked_changed);
+        assert_eq!(*cameras.get("right").unwrap(), before);
+    }
 
     #[test]
     fn navigation_waits_for_maximize_exit_and_preserves_restored_zoom() {

@@ -63,6 +63,12 @@ pub struct Field {
     pub close_restore_nodes: bool,
     pub close_restore_pan: CloseRestorePan,
     pub zoom: Zoom,
+    /// Opt-in: pan and zoom one Field camera and every other Field camera
+    /// follows at the same zoom, keeping the layout seam continuous, like one
+    /// wide viewport across the monitors. Off by default: cameras stay
+    /// independent. Presentation cameras (fullscreen, Field maximize, open
+    /// cluster) never follow and are never followed.
+    pub linked_cameras: bool,
 }
 
 impl Default for Field {
@@ -74,6 +80,7 @@ impl Default for Field {
             close_restore_nodes: false,
             close_restore_pan: CloseRestorePan::IfOffscreen,
             zoom: Zoom::default(),
+            linked_cameras: false,
         }
     }
 }
@@ -226,6 +233,10 @@ pub fn parse_field_checked(config: &RuneConfig) -> Result<Field, FieldParseError
         close_restore_nodes: config
             .get_or("field.close-restore-nodes", defaults.close_restore_nodes),
         close_restore_pan: pan,
+        linked_cameras: config
+            .get_optional::<bool>("field.linked-cameras")
+            .map_err(|error| FieldParseError(format!("field.linked-cameras: {error}")))?
+            .unwrap_or(defaults.linked_cameras),
         zoom: Zoom {
             enabled: canonical_or_legacy_bool(
                 config,
@@ -269,6 +280,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn linked_cameras_require_explicit_opt_in() {
+        for (text, expected) in [("", false), ("field:\n  linked-cameras true\nend\n", true)] {
+            let config = RuneConfig::from_str(text).unwrap();
+            assert_eq!(
+                parse_field_checked(&config).unwrap().linked_cameras,
+                expected
+            );
+        }
+        let invalid = RuneConfig::from_str("field:\n  linked-cameras \"yes\"\nend\n").unwrap();
+        assert!(
+            parse_field_checked(&invalid)
+                .unwrap_err()
+                .to_string()
+                .contains("field.linked-cameras")
+        );
+    }
+
+    #[test]
     fn canonical_field_values_win_per_setting() {
         let config = RuneConfig::from_str(
             r#"
@@ -301,6 +330,7 @@ end
                 close_restore_focus: false,
                 close_restore_nodes: true,
                 close_restore_pan: CloseRestorePan::Always,
+                linked_cameras: false,
                 zoom: Zoom {
                     enabled: true,
                     min: 0.2,

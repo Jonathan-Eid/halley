@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Add opt-in `field.linked-cameras` (default `false`). When enabled, panning
+  or zooming one monitor's Field camera moves every other monitor's Field
+  camera by the same delta at the same zoom, keeping the layout seam
+  continuous so the monitors act as one wide viewport over the Field.
+  Fullscreen, Field maximize, and open cluster workspaces stay monitor-local
+  and never follow or lead. With the option off, cameras remain independent.
 - Add the optional `halley-surface-dismissal-v1` Wayland interface for clients
   watching their own layer surfaces. Outside left presses are one-shot
   notifications; the client owns dismissal and the click keeps its normal target.
