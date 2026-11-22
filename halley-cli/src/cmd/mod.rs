@@ -23,6 +23,12 @@ pub enum BearingsAction {
     Status,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionAction {
+    Save,
+    Load,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     Outputs,
@@ -80,6 +86,8 @@ pub enum Action {
     ConfigHelp,
     Basics,
     BasicsHelp,
+    Session(SessionAction),
+    SessionHelp,
     Quit,
     Version,
     Help,
@@ -141,6 +149,7 @@ pub fn parse(args: &[String]) -> Result<Action, String> {
             }
             Action::Basics
         }
+        Some("session") => return parse_session(&args[1..]),
         Some("quit") => Action::Quit,
         Some(other) => return Err(format!("unknown command {other:?}")),
     };
@@ -149,6 +158,24 @@ pub fn parse(args: &[String]) -> Result<Action, String> {
         return Err(format!("unexpected argument {unexpected:?}"));
     }
     Ok(action)
+}
+
+fn parse_session(args: &[String]) -> Result<Action, String> {
+    if args
+        .iter()
+        .any(|arg| arg == "-h" || arg == "--help")
+    {
+        return Ok(Action::SessionHelp);
+    }
+    if args.len() > 1 {
+        return Err(format!("unexpected argument {:?}", args[1]));
+    }
+    match args.first().map(String::as_str) {
+        Some("save") => Ok(Action::Session(SessionAction::Save)),
+        Some("load") => Ok(Action::Session(SessionAction::Load)),
+        Some(other) => Err(format!("unknown session command {other:?}")),
+        None => Err("session requires save or load".to_string()),
+    }
 }
 
 fn parse_output_option(args: &[String], command: &str) -> Result<Option<String>, String> {

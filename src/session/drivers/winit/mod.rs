@@ -998,6 +998,7 @@ pub fn run(explicit_config_path: Option<std::path::PathBuf>) {
                 crate::accessibility::start_configured_orca(&app, &orca_wayland_display);
         }
         crate::ipc::publish_api_events(&mut app);
+        app.session_restore_tick();
         // Every cluster mutation in this iteration - keyboard or pointer
         // activation, IPC, creation, dissolution, output changes - is published
         // here rather than at each mutation site.

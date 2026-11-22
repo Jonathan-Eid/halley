@@ -378,6 +378,24 @@ impl Client {
     pub fn reload_config(&self) -> Result<()> {
         self.ack(halley_ipc::Request::ConfigReload)
     }
+    /// Write a manual snapshot of ordinary flat Field windows.
+    pub fn session_save(&self) -> Result<PathBuf> {
+        match self.request(halley_ipc::Request::Session(
+            halley_ipc::SessionRequest::Save,
+        ))? {
+            halley_ipc::Response::SessionSaved { path, .. } => Ok(PathBuf::from(path)),
+            other => Err(unexpected("session save", other)),
+        }
+    }
+    /// Relaunch and re-place the windows recorded by `session_save`.
+    pub fn session_load(&self) -> Result<usize> {
+        match self.request(halley_ipc::Request::Session(
+            halley_ipc::SessionRequest::Load,
+        ))? {
+            halley_ipc::Response::SessionLoaded { windows } => Ok(windows),
+            other => Err(unexpected("session load", other)),
+        }
+    }
     /// Capture a target and wait for the saved file or interactive cancellation.
     /// Requires `direct-capture-v1`. Explicit targets skip selection and show the saved preview.
     pub fn capture_target(&self, target: CaptureTarget) -> Result<CaptureOutcome> {

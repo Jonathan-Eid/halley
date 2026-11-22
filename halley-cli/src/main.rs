@@ -5,7 +5,7 @@ mod print;
 
 use std::process::ExitCode;
 
-use cmd::{Action, BearingsAction, ClusterCommand, NodeCommand, TrailCommand};
+use cmd::{Action, BearingsAction, ClusterCommand, NodeCommand, SessionAction, TrailCommand};
 use halley_api::{BearingsCommand, CaptureOptions, CaptureOutcome, Client};
 
 fn main() -> ExitCode {
@@ -21,6 +21,17 @@ fn main() -> ExitCode {
             Ok(ExitCode::SUCCESS)
         }),
         Ok(Action::BasicsHelp) => show(help::BASICS_HELP),
+        Ok(Action::Session(SessionAction::Save)) => with_client(|client| {
+            let path = client.session_save()?;
+            println!("saved: {}", path.display());
+            Ok(ExitCode::SUCCESS)
+        }),
+        Ok(Action::Session(SessionAction::Load)) => with_client(|client| {
+            let windows = client.session_load()?;
+            println!("restoring {windows} window(s)");
+            Ok(ExitCode::SUCCESS)
+        }),
+        Ok(Action::SessionHelp) => show(help::SESSION_HELP),
         Ok(Action::Capture { target, silent }) => with_client(|client| {
             match client.capture_target_with_options(target, CaptureOptions { silent })? {
                 CaptureOutcome::Saved(path) => println!("saved: {}", path.display()),

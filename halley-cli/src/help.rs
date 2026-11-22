@@ -5,6 +5,7 @@ Commands:
   outputs        List connected monitors and their current mode/position
   reload         Reload the selected configuration immediately
   basics         Show Halley's one-time basics card again
+  session        Manually save or load the flat Field window session
   capture        Capture a screen, window, or region
   dpms           Control tty output power state
   node           List, inspect, focus, move, collapse, restore, toggle, or close nodes
@@ -48,6 +49,20 @@ Usage:
 Shows Halley's basics card again on the selected monitor. The card is offered
 automatically once to a freshly generated configuration's first native session;
 the card is dismissed with Enter, Escape, or a click.
+";
+
+pub const SESSION_HELP: &str = "\
+Usage:
+  halleyctl session save
+  halleyctl session load
+
+`save` writes a manual snapshot of ordinary expanded Field windows: application
+id, title, output, and client geometry. Clusters, collapsed nodes, camera state,
+focus history, and timers are not recorded. Nothing is saved automatically.
+
+`load` relaunches each recorded application and places the first matching window
+at its saved geometry. Applications that restore their own windows or expose no
+usable application id are matched on a best-effort basis.
 ";
 
 pub const CAPTURE_HELP: &str = "\

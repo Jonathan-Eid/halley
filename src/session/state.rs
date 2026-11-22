@@ -209,6 +209,20 @@ impl<D: SessionDriver> Session<D> {
             .run_reload(commands, x11_display.as_deref(), self.cursor.size());
     }
 
+    /// Writes a manual snapshot of ordinary flat Field windows.
+    pub(crate) fn session_save(&mut self) -> std::io::Result<(std::path::PathBuf, usize)> {
+        super::restore::save(self)
+    }
+
+    /// Starts a manual restore plan; the event loop advances it.
+    pub(crate) fn session_load(&mut self) -> std::io::Result<usize> {
+        super::restore::load(self)
+    }
+
+    pub(crate) fn session_restore_tick(&mut self) {
+        super::restore::tick(self);
+    }
+
     pub fn request_redraw(&mut self) {
         self.driver.request_redraw(None);
     }
