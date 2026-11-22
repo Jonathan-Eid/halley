@@ -5,41 +5,28 @@
 //! polled with `DrmScanner` when the existing udev power monitor reports
 //! a DRM device change (`Added`/`Changed`/`Removed`). Results are
 //! dispatched as `DrmScanEvent::Connected`/`Disconnected`/`Changed`
-//! into the assumed backend API below, and each returned
+//! into the [`HotplugBackend`] API below, and each returned
 //! `(Output, SideEffect)` is registered/unregistered with the session.
 //!
-//! ASSUMED BACKEND API (owned by the concurrent backend agent, currently
-//! stubbed here so `cargo check` passes standalone):
-//!   - `HotplugBackend::hotplug_scan_all() -> Result<Vec<(usize, DrmScanEvent)>, String>`
-//!     Backend must retain one `DrmScanner` per GPU (it is currently
-//!     discarded in `TtyBackend::new`) plus a `ControlDevice` handle per
-//!     GPU, and return diffs since the previous scan. `usize` is the
-//!     GPU index, matching `output_for_crtc(gpu_index, crtc)`.
-//!   - `apply_hotplug_connector(gpu_index, connector, crtc, configured)`
-//!     -> `Result<Vec<(Output, SideEffect)>, String>`; `configured` is
-//!     the session-resolved `OutputConfig` for this connector name (see
-//!     [`resolve_output_config`]), or `None` for preferred-mode defaults.
-//!   - `apply_hotplug_disconnect(gpu_index, connector, crtc)`
-//!     -> `Result<Vec<(Output, SideEffect)>, String>`
-//!   - `apply_hotplug_changed(gpu_index, connector, crtc, configured)`
-//!     -> `Result<Vec<(Output, SideEffect)>, String>` for
-//!     `DrmScanEvent::Changed` (mode list changed while connected).
-//!   `SideEffect` is [`HotplugSideEffect`]; backend agent should move
-//!   this type into `crate::backend::tty` (or re-export it) and replace
-//!   the stub `impl HotplugBackend for TtyBackend` with inherent
-//!   methods of the same names/signatures, then delete the trait. Calls
-//!   below use method syntax, so inherent methods take precedence and
-//!   the trait impl becomes dead code that can be removed.
+//! The backend retains one `DrmScanner` per GPU (`TtyGpu::scanner`),
+//! so `scan_hotplug_events` reports diffs since the previous call.
+//! `apply_hotplug_connector` allocates CRTC/mode/output state for
+//! `Connected` (`attach_output`); `apply_hotplug_disconnect` tears it
+//! down via `remove_output` (IPC info included); `apply_hotplug_changed`
+//! refreshes stored connector info.
 //!
-//! TODO(backend-agent):
-//!   1. Retain per-GPU `DrmScanner`s across `TtyBackend::new` (today the
-//!      scanner is a local) and implement the four methods above,
-//!      allocating CRTC/mode/output state for `Connected` and tearing
-//!      it down for `Disconnected` (including `ipc_output_info`).
-//!   2. Decide the fall-back when the last output disconnects (session
-//!      refuses to unregister the final output; see `unregister_output`).
-//!   3. Confirm `Changed` should re-run `output_target` mode selection
-//!      like `apply_output_config`, not just refresh IPC info.
+//! Design notes / TODO:
+//!   1. Last output: the session refuses to unregister the final output
+//!      (see `unregister_output`), so a compositor never goes fully dark.
+//!   2. `Changed` is currently informational only (IPC refresh); it does
+//!      not re-run `output_target` mode selection like config reload
+//!      does. Wire that only if a mode-list change (e.g. EDID update)
+//!      needs mid-session re-negotiation.
+//!
+//! Naming: `HotplugSideEffect` is [`HotplugSideEffect`]; the trait can be
+//! collapsed into inherent `TtyBackend` methods when Smithay's udev
+//! path already passes `(DrmScanEvent)` — the separate trait exists to
+//! keep this file's contract explicit.
 
 use smithay::output::Output;
 use smithay::reexports::drm::control::{connector, crtc};
