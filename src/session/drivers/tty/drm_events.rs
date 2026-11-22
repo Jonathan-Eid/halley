@@ -82,36 +82,55 @@ pub(crate) trait HotplugBackend {
 
 impl HotplugBackend for TtyBackend {
     fn hotplug_scan_all(&mut self) -> Result<Vec<(usize, DrmScanEvent)>, String> {
-        Err("hotplug: backend scan not yet implemented (backend agent TODO)".into())
+        self.scan_hotplug_events()
     }
 
     fn apply_hotplug_connector(
         &mut self,
-        _gpu_index: usize,
-        _connector: connector::Info,
-        _crtc: Option<crtc::Handle>,
-        _configured: Option<&halley_config::OutputConfig>,
+        gpu_index: usize,
+        connector: connector::Info,
+        crtc: Option<crtc::Handle>,
+        configured: Option<&halley_config::OutputConfig>,
     ) -> Result<Vec<(Output, HotplugSideEffect)>, String> {
-        Err("hotplug: apply_hotplug_connector not yet implemented (backend agent TODO)".into())
+        // `attach_output` resolves its own by-name config from the full
+        // slice; `configured` is only advisory (the resolver already ran).
+        let _ = configured;
+        // Snapshot the slice: it immutably borrows `self` while
+        // `attach_output` needs a mutable borrow.
+        let configs = self.configured_outputs_for_hotplug().to_vec();
+        let output = self.attach_output(gpu_index, connector, crtc, &configs)?;
+        Ok(vec![(output, HotplugSideEffect::Added)])
     }
 
     fn apply_hotplug_disconnect(
         &mut self,
-        _gpu_index: usize,
-        _connector: connector::Info,
-        _crtc: Option<crtc::Handle>,
+        gpu_index: usize,
+        connector: connector::Info,
+        crtc: Option<crtc::Handle>,
     ) -> Result<Vec<(Output, HotplugSideEffect)>, String> {
-        Err("hotplug: apply_hotplug_disconnect not yet implemented (backend agent TODO)".into())
+        let configs = self.configured_outputs_for_hotplug().to_vec();
+        let removed = self.attach_scan_event(
+            gpu_index,
+            DrmScanEvent::Disconnected { connector, crtc },
+            &configs,
+        )?;
+        Ok(removed.map_or(vec![], |output| vec![(output, HotplugSideEffect::Removed)]))
     }
 
     fn apply_hotplug_changed(
         &mut self,
-        _gpu_index: usize,
-        _connector: connector::Info,
-        _crtc: Option<crtc::Handle>,
+        gpu_index: usize,
+        connector: connector::Info,
+        crtc: Option<crtc::Handle>,
         _configured: Option<&halley_config::OutputConfig>,
     ) -> Result<Vec<(Output, HotplugSideEffect)>, String> {
-        Err("hotplug: apply_hotplug_changed not yet implemented (backend agent TODO)".into())
+        let configs = self.configured_outputs_for_hotplug().to_vec();
+        self.attach_scan_event(
+            gpu_index,
+            DrmScanEvent::Changed { connector, crtc },
+            &configs,
+        )?;
+        Ok(vec![])
     }
 }
 
