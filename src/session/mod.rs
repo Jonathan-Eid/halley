@@ -364,6 +364,12 @@ pub(crate) fn has_active_pointer_confinement<D: SessionDriver>(session: &Session
     pointer::has_active_confinement(session)
 }
 
+/// Any active pointer lock or confinement, for callers outside the pointer
+/// module tree (e.g. pan-follow transfer guards).
+pub(crate) fn has_active_pointer_constraint<D: SessionDriver>(session: &Session<D>) -> bool {
+    pointer::has_active_constraint(session)
+}
+
 pub(crate) fn cursor_visible<D: SessionDriver>(session: &Session<D>) -> bool {
     pointer::cursor_visible(session)
 }
