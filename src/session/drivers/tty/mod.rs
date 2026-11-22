@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+mod drm_events;
 mod frame;
 mod sleep;
 mod vt;
@@ -47,6 +48,12 @@ struct TtyDriver {
     output_frames: HashMap<Output, OutputFrameState>,
     pause_reasons: PauseReasons,
     pending_output_config: Option<Vec<halley_config::OutputConfig>>,
+    /// Last applied output hardware config, retained so a hotplugged
+    /// connector can be resolved to its configured mode/offset/scale
+    /// (mirrors `backend::tty::output::output_target`'s find-by-name).
+    /// `RuntimeSettings` does not store this, and `apply_runtime_config`
+    /// only forwards it via `apply_tty_output_config`.
+    applied_output_config: Vec<halley_config::OutputConfig>,
     /// A wake-on-input that arrived while the session was paused, applied
     /// once it resumes: `Some(None)` wakes every output, `Some(Some(name))`
     /// one output.
@@ -451,6 +458,7 @@ pub fn run(explicit_config_path: Option<std::path::PathBuf>) {
             system_sleep: false,
         },
         pending_output_config: None,
+        applied_output_config: runtime_config.outputs.clone(),
         deferred_wake: None,
     };
     let mut wayland = TtyApp::create_wayland_state(dh.clone(), &mut driver);
@@ -830,7 +838,10 @@ pub fn run(explicit_config_path: Option<std::path::PathBuf>) {
         .expect("failed to insert session notifier");
 
     // Fail existing power objects promptly when an initialized connector is
-    // unplugged. New connector/CRTC allocation remains startup-only.
+    // unplugged; poll for connector hotplug on the same udev signal.
+    // `DrmDeviceNotifier` (below) only delivers VBlank/Error, so udev is
+    // the hotplug trigger and `drm_events::on_udev_hotplug` diffs with
+    // `DrmScanner` (see `drm_events` for the assumed backend API).
     let power_monitor =
         smithay::backend::udev::UdevBackend::new(app.driver.backend.session().seat())
             .expect("failed to monitor DRM output power availability");
@@ -845,6 +856,7 @@ pub fn run(explicit_config_path: Option<std::path::PathBuf>) {
                 app.driver.refresh_output_power_availability(None);
                 app.sync_output_power();
             }
+            drm_events::on_udev_hotplug(app);
         })
         .expect("failed to insert output power availability monitor");
 
@@ -1221,6 +1233,8 @@ fn apply_runtime_config(app: &mut TtyApp, reload: crate::config::ConfigReload) {
 }
 
 fn apply_tty_output_config(app: &mut TtyApp, outputs_config: &[halley_config::OutputConfig]) {
+    // Retain for hotplug config resolution; see `drm_events`.
+    app.driver.applied_output_config = outputs_config.to_vec();
     let before = app.driver.backend.output_states();
     let pointer_output = app
         .wayland
