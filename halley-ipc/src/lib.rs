@@ -24,7 +24,7 @@ pub use types::{
     NodeListResponse, NodeMoveDirection, NodeOutputGroup, NodeProtocolFamily, NodeRelationInfo,
     NodeRequest, NodeRole, NodeSelector, NodeState, OutputInfo, OutputsResponse,
     RegisterDmabufRequest, Request, Response, SOURCE_MONITOR, SOURCE_WINDOW, ScreenshotRequest,
-    ScreenshotResponse, ScreenshotTarget, ServerError, ServerErrorKind, ServerInfo,
+    ScreenshotResponse, ScreenshotTarget, ServerError, ServerErrorKind, ServerInfo, SessionRequest,
     SourceChooserRequest, SourceChooserResponse, StackCycleDirection, StateSnapshot,
     SubscribeRequest, TrailEntryInfo, TrailListResponse, TrailRequest, TrailTarget, VersionInfo,
 };
@@ -59,6 +59,9 @@ pub fn ensure_runtime_dir() -> io::Result<PathBuf> {
 /// there too), so a missing one means something more fundamental is wrong,
 /// not a case worth a synthetic `/tmp` fallback for.
 pub fn default_socket_path() -> io::Result<PathBuf> {
+    if let Some(path) = std::env::var_os("HALLEY_SOCKET") {
+        return Ok(PathBuf::from(path));
+    }
     Ok(halley_runtime_dir()?.join("halley.sock"))
 }
 

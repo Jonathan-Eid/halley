@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+mod drm_events;
 mod frame;
 mod sleep;
 mod vt;
@@ -47,6 +48,12 @@ struct TtyDriver {
     output_frames: HashMap<Output, OutputFrameState>,
     pause_reasons: PauseReasons,
     pending_output_config: Option<Vec<halley_config::OutputConfig>>,
+    /// Last applied output hardware config, retained so a hotplugged
+    /// connector can be resolved to its configured mode/offset/scale
+    /// (mirrors `backend::tty::output::output_target`'s find-by-name).
+    /// `RuntimeSettings` does not store this, and `apply_runtime_config`
+    /// only forwards it via `apply_tty_output_config`.
+    applied_output_config: Vec<halley_config::OutputConfig>,
     /// A wake-on-input that arrived while the session was paused, applied
     /// once it resumes: `Some(None)` wakes every output, `Some(Some(name))`
     /// one output.
@@ -451,6 +458,7 @@ pub fn run(explicit_config_path: Option<std::path::PathBuf>) {
             system_sleep: false,
         },
         pending_output_config: None,
+        applied_output_config: runtime_config.outputs.clone(),
         deferred_wake: None,
     };
     let mut wayland = TtyApp::create_wayland_state(dh.clone(), &mut driver);
@@ -830,7 +838,10 @@ pub fn run(explicit_config_path: Option<std::path::PathBuf>) {
         .expect("failed to insert session notifier");
 
     // Fail existing power objects promptly when an initialized connector is
-    // unplugged. New connector/CRTC allocation remains startup-only.
+    // unplugged; poll for connector hotplug on the same udev signal.
+    // `DrmDeviceNotifier` (below) only delivers VBlank/Error, so udev is
+    // the hotplug trigger and `drm_events::on_udev_hotplug` diffs with
+    // `DrmScanner` (see `drm_events` for the assumed backend API).
     let power_monitor =
         smithay::backend::udev::UdevBackend::new(app.driver.backend.session().seat())
             .expect("failed to monitor DRM output power availability");
@@ -845,6 +856,7 @@ pub fn run(explicit_config_path: Option<std::path::PathBuf>) {
                 app.driver.refresh_output_power_availability(None);
                 app.sync_output_power();
             }
+            drm_events::on_udev_hotplug(app);
         })
         .expect("failed to insert output power availability monitor");
 
@@ -890,6 +902,7 @@ pub fn run(explicit_config_path: Option<std::path::PathBuf>) {
                 redraw_queued_outputs(app, &loop_handle);
             }
             crate::ipc::publish_api_events(app);
+            app.session_restore_tick();
             // Every cluster mutation in this iteration is published here rather
             // than at each mutation site.
             super::workspace::sync_ext_workspace(app);
@@ -1220,6 +1233,8 @@ fn apply_runtime_config(app: &mut TtyApp, reload: crate::config::ConfigReload) {
 }
 
 fn apply_tty_output_config(app: &mut TtyApp, outputs_config: &[halley_config::OutputConfig]) {
+    // Retain for hotplug config resolution; see `drm_events`.
+    app.driver.applied_output_config = outputs_config.to_vec();
     let before = app.driver.backend.output_states();
     let pointer_output = app
         .wayland
@@ -1363,23 +1378,46 @@ fn redraw_output(app: &mut TtyApp, output: &Output, loop_handle: &LoopHandle<'_,
     let cluster_camera_changed =
         super::sync_cluster_camera(app, &output.name(), target_presentation_time);
     let fullscreen_camera_changed = app.sync_fullscreen_camera(output, target_presentation_time);
-    let zoom_tick =
-        app.cameras
-            .get_mut_for_tick(&output.name())
-            .map(|(camera, fullscreen_returning)| {
-                let before = crate::input::zoom::scale(camera);
-                let (after, animating) = crate::input::zoom::tick_camera(
-                    camera,
-                    fullscreen_returning,
-                    &app.settings.zoom,
-                    app.settings.input.gestures.pan_decay_rate,
-                    dt.as_secs_f32(),
-                );
-                (animating, (before != after).then_some((before, after)))
-            });
-    let camera_animating = zoom_tick.is_some_and(|(animating, _)| animating);
+    let linked_layout = super::linked_camera_layout(app);
+    let zoom_scale_before = app
+        .cameras
+        .get(&output.name())
+        .map(crate::input::zoom::scale);
+    let camera_tick = app.cameras.tick_output(
+        &output.name(),
+        &app.settings.zoom,
+        app.settings.input.gestures.pan_decay_rate,
+        dt.as_secs_f32(),
+        linked_layout.as_deref(),
+    );
+    if camera_tick.linked_changed {
+        // Mirrored Field cameras moved on outputs this redraw pass does not
+        // cover; queue their frames so the linked view actually renders.
+        let mirrored: Vec<_> = app
+            .driver
+            .backend
+            .outputs()
+            .filter(|other| *other != output)
+            .cloned()
+            .collect();
+        for other in mirrored {
+            app.driver.request_redraw(Some(&other));
+        }
+    }
+    let zoom_scale_after = app
+        .cameras
+        .get(&output.name())
+        .map(crate::input::zoom::scale);
+    let camera_animating = camera_tick.animating || camera_tick.linked_changed;
+    let zoom_tick = match (zoom_scale_before, zoom_scale_after) {
+        (Some(before), Some(after)) => (
+            camera_animating,
+            (before != after).then_some((before, after)),
+        ),
+        _ => (camera_animating, None),
+    };
     let edge_pan_animating = super::input::grabbed_window_edge_pan_active_on(app, &output.name());
-    if let Some((before, after)) = zoom_tick.and_then(|(_, scales)| scales) {
+    if let Some((before, after)) = zoom_tick.1 {
         if app.clusters.active_on(&output.name()).is_none() {
             if after < before {
                 crate::nodes::reconcile_landmarks_for_zoom(app, &output.name(), after);

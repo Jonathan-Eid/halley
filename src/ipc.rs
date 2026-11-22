@@ -540,7 +540,16 @@ pub fn init_ipc_listener<App: 'static>(
     handler: impl Fn(&mut App, RequestEnvelope) + 'static,
     disconnected: impl Fn(&mut App, u64) + 'static,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let path = halley_ipc::ensure_runtime_dir()?.join("halley.sock");
+    let path = match std::env::var_os("HALLEY_SOCKET") {
+        Some(path) => {
+            let path = std::path::PathBuf::from(path);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            path
+        }
+        None => halley_ipc::ensure_runtime_dir()?.join("halley.sock"),
+    };
     remove_stale_socket(&path)?;
 
     let listener = UnixListener::bind(&path)?;
@@ -817,6 +826,23 @@ pub fn handle_request<D: crate::session::SessionDriver>(
             }
         }
         halley_ipc::Request::Subscribe(_) => unreachable!(),
+        halley_ipc::Request::Session(request) => match request {
+            halley_ipc::SessionRequest::Save => match app.session_save() {
+                Ok((path, windows)) => halley_ipc::Response::SessionSaved {
+                    path: path.display().to_string(),
+                    windows,
+                },
+                Err(error) => {
+                    halley_ipc::Response::Error(format!("could not save session snapshot: {error}"))
+                }
+            },
+            halley_ipc::SessionRequest::Load => match app.session_load() {
+                Ok(windows) => halley_ipc::Response::SessionLoaded { windows },
+                Err(error) => {
+                    halley_ipc::Response::Error(format!("could not load session snapshot: {error}"))
+                }
+            },
+        },
         halley_ipc::Request::ConfigReload => match app.config_source.request_reload() {
             true => halley_ipc::Response::Ack,
             false => halley_ipc::Response::ApiError(halley_ipc::ServerError::new(

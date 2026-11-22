@@ -535,16 +535,13 @@ pub fn run(explicit_config_path: Option<std::path::PathBuf>) {
                 let zoom_scale_before =
                     app.cameras.get(&output_name).map(crate::input::zoom::scale);
                 let mut camera_animating = cluster_camera_changed;
-                for (camera, fullscreen_returning) in app.cameras.iter_for_tick() {
-                    camera_animating |= crate::input::zoom::tick_camera(
-                        camera,
-                        fullscreen_returning,
-                        &app.settings.zoom,
-                        app.settings.input.gestures.pan_decay_rate,
-                        dt,
-                    )
-                    .1;
-                }
+                let linked_layout = super::linked_camera_layout(app);
+                camera_animating |= app.cameras.tick_all_outputs(
+                    &app.settings.zoom,
+                    app.settings.input.gestures.pan_decay_rate,
+                    dt,
+                    linked_layout.as_deref(),
+                );
                 let zoom_scale_after = app.cameras.get(&output_name).map(crate::input::zoom::scale);
                 if let (Some(before), Some(after)) = (zoom_scale_before, zoom_scale_after)
                     && before != after
@@ -1001,6 +998,7 @@ pub fn run(explicit_config_path: Option<std::path::PathBuf>) {
                 crate::accessibility::start_configured_orca(&app, &orca_wayland_display);
         }
         crate::ipc::publish_api_events(&mut app);
+        app.session_restore_tick();
         // Every cluster mutation in this iteration - keyboard or pointer
         // activation, IPC, creation, dissolution, output changes - is published
         // here rather than at each mutation site.

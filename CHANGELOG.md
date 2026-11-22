@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Add core geometry for projecting one Field onto independent output cameras
+  and checking visibility across them. The compositor still presents each
+  window on its assigned monitor.
+- Add opt-in `field.linked-cameras` (default `false`). When enabled, panning
+  or zooming one monitor's Field camera moves every other monitor's Field
+  camera by the same delta at the same zoom, keeping the layout seam
+  continuous so the monitors act as one wide viewport over the Field.
+  Fullscreen, Field maximize, and open cluster workspaces stay monitor-local
+  and never follow or lead. With the option off, cameras remain independent.
+- Add opt-in `field.pan-follow-into-adjacent` (default `false`). While a
+  `drag-pan` window drag edge-pans the camera across the layout seam, a
+  window that ends up mostly inside an adjacent display's visible region
+  (and mostly outside its owning display's) changes owner to that display
+  instead of stranding it off-screen. Cluster members, fullscreen,
+  maximized, pinned, and pointer-constrained windows never follow.
 - Add the optional `halley-surface-dismissal-v1` Wayland interface for clients
   watching their own layer surfaces. Outside left presses are one-shot
   notifications; the client owns dismissal and the click keeps its normal target.

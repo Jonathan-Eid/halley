@@ -242,6 +242,9 @@ struct TtyGpu {
     drm_fd: DrmDeviceFd,
     drm_output_manager: TtyDrmOutputManager,
     notifier: Option<DrmDeviceNotifier>,
+    /// Retained across calls so `DrmScanner::scan_connectors` reports
+    /// diffs, not full snapshots. Dropped with the GPU.
+    scanner: DrmScanner,
 }
 
 pub(super) type TtyDrmOutput = DrmOutput<
@@ -308,10 +311,13 @@ pub struct AppliedOutputChange {
 /// involved. Wraps exactly what rendering needs, mirroring how
 /// `WinitBackend` wraps exactly `WinitGraphicsBackend<GlesRenderer>`.
 ///
-/// One entry per connected connector at startup (no hotplug) - every
-/// connected output must be initialized, not just the first, or its CRTC is
-/// left in stale, un-negotiated state during another CRTC's atomic modeset
-/// commit, which caused a real system freeze on this project's AMD hardware.
+/// One entry per connected connector. Startup initializes every connected
+/// connector at once; runtime hotplug goes through [`TtyBackend::attach_output`]
+/// / [`TtyBackend::remove_output`], which reuse the same initialization path.
+/// Every connected output must be initialized, not just the first, or its
+/// CRTC is left in stale, un-negotiated state during another CRTC's atomic
+/// modeset commit, which caused a real system freeze on this project's AMD
+/// hardware.
 ///
 /// `session` is kept only for later VT-switch handling (`pause`/`resume`) -
 /// `render()` never reaches into it, matching `Renderable`'s narrow contract.
@@ -584,6 +590,7 @@ impl TtyBackend {
                         drm_fd,
                         drm_output_manager: manager,
                         notifier: Some(notifier),
+                        scanner,
                     },
                     entries,
                     gpu_outputs,
@@ -1376,6 +1383,336 @@ impl TtyBackend {
         changes
     }
 
+    /// Number of GPUs probed at startup. Runtime hotplug only attaches to
+    /// one of these; a GPU device itself appearing later is not supported.
+    pub fn gpu_count(&self) -> usize {
+        self.gpus.len()
+    }
+
+    /// Render node of a startup GPU, for mapping a scanner/udev device to
+    /// the `gpu_index` [`attach_output`](Self::attach_output) expects.
+    pub fn gpu_render_node(&self, gpu_index: usize) -> Option<DrmNode> {
+        self.gpus.get(gpu_index).map(|gpu| gpu.render_node)
+    }
+
+    /// Connector name (`DP-1`, `HDMI-A-2`, ...) for a scanner connector,
+    /// so session code can key outputs without importing the output helpers.
+    pub fn connector_output_name(connector: &connector::Info) -> String {
+        connector_name(connector)
+    }
+
+    /// Initialize a newly connected output exactly like startup does:
+    /// creates the `Output`, modesets via the owning GPU's
+    /// `DrmOutputManager`, registers the entry in `drm_outputs`/`outputs`/
+    /// `ipc_output_info`, and sets up VRR, gamma, dmabuf feedback and frame
+    /// state. `gpu_index` indexes the startup GPU list (see
+    /// [`gpu_render_node`](Self::gpu_render_node)); `connector`/`crtc` are
+    /// the scanner's values for this plug event. `outputs_config` is the
+    /// session's current output config (searched by connector name).
+    ///
+    /// Returns the new `Output` on success. On failure the connector is
+    /// still recorded in `ipc_output_info` (as at startup) and an error
+    /// string is returned; no entry is kept.
+    ///
+    /// Limitations: the GPU must already exist in `gpus` (a hotplugged
+    /// *display* on a known GPU works; a hotplugged *GPU* does not). The
+    /// new `Output` is NOT mapped into the compositor's `Space` and its
+    /// `wl_output` global is NOT advertised - the session caller must do
+    /// both (e.g. via `outputs()`). The configured offset is used as-is,
+    /// without the startup layout-origin shift, so existing outputs never
+    /// move; call `apply_output_config` afterwards if the new head should
+    /// participate in layout normalization.
+    pub fn attach_output(
+        &mut self,
+        gpu_index: usize,
+        connector: connector::Info,
+        crtc: Option<crtc::Handle>,
+        outputs_config: &[halley_config::OutputConfig],
+    ) -> Result<Output, String> {
+        let name = connector_name(&connector);
+        if self
+            .drm_outputs
+            .iter()
+            .any(|entry| entry.output.name() == name)
+        {
+            return Err(format!("output {name:?} is already attached"));
+        }
+        let Some(gpu) = self.gpus.get(gpu_index) else {
+            return Err(format!("unknown GPU index {gpu_index}"));
+        };
+        let render_node = gpu.render_node;
+        let configured = outputs_config.iter().find(|cfg| cfg.name == name);
+        let target = output_target(&connector, configured);
+        let offset = target.offset;
+        let vrr = target.vrr;
+
+        if connector.modes().is_empty() {
+            eventline::warn!("output {name:?}: connected connector advertises no modes");
+            self.ipc_output_info.push(connector_output_info(
+                name.clone(),
+                &connector,
+                None,
+                offset,
+                VrrInfo {
+                    configured: vrr,
+                    supported: false,
+                    active: false,
+                },
+                target.scale,
+            ));
+            return Err(format!("output {name:?}: connector advertises no modes"));
+        }
+        let Some(crtc) = crtc else {
+            eventline::warn!("output {name:?}: connected connector has no available CRTC");
+            self.ipc_output_info.push(connector_output_info(
+                name.clone(),
+                &connector,
+                None,
+                offset,
+                VrrInfo {
+                    configured: vrr,
+                    supported: false,
+                    active: false,
+                },
+                target.scale,
+            ));
+            return Err(format!("output {name:?}: no available CRTC"));
+        };
+        let mode = target.mode;
+        let output = Output::new(
+            name.clone(),
+            PhysicalProperties {
+                size: (0, 0).into(),
+                subpixel: Subpixel::Unknown,
+                make: "halley-next".into(),
+                model: "tty".into(),
+                serial_number: "unknown".into(),
+            },
+        );
+        output.change_current_state(
+            Some(drm_output_mode(&mode)),
+            Some(target.transform),
+            Some(smithay::output::Scale::Fractional(target.scale)),
+            Some(offset.into()),
+        );
+        output.set_preferred(drm_output_mode(&default_mode(&connector)));
+
+        let result = {
+            let mut renderer = self
+                .gpu_manager
+                .single_renderer(&render_node)
+                .map_err(|err| format!("renderer unavailable for GPU {gpu_index}: {err:?}"))?;
+            let gpu = &mut self.gpus[gpu_index];
+            gpu.drm_output_manager
+                .lock()
+                .initialize_output::<GlesRenderer, SolidColorRenderElement>(
+                    crtc,
+                    mode,
+                    &[connector.handle()],
+                    &output,
+                    None,
+                    renderer.as_mut(),
+                    &DrmOutputRenderElements::default(),
+                )
+                .map_err(|err| format!("failed to initialize output {name:?}: {err}"))
+        };
+        let drm_output = match result {
+            Ok(drm_output) => drm_output,
+            Err(err) => {
+                eventline::error!("{err}");
+                self.ipc_output_info.push(connector_output_info(
+                    name.clone(),
+                    &connector,
+                    None,
+                    offset,
+                    VrrInfo {
+                        configured: vrr,
+                        supported: false,
+                        active: false,
+                    },
+                    target.scale,
+                ));
+                return Err(err);
+            }
+        };
+
+        let vrr_support = query_vrr_support(&drm_output, connector.handle(), &name);
+        let requested_vrr = configured_vrr_target(vrr, false, vrr_support);
+        if let Err(err) = drm_output.with_compositor(|compositor| compositor.use_vrr(requested_vrr))
+        {
+            eventline::warn!(
+                "output {name:?}: failed to set initial VRR state to {requested_vrr}: {err}"
+            );
+        }
+        let vrr_active = drm_output.with_compositor(|compositor| compositor.vrr_enabled());
+        warn_vrr_configuration(&name, vrr, vrr_support);
+
+        let gamma = gamma::GammaState::new(self.gpus[gpu_index].drm_output_manager.device(), crtc);
+        let dmabuf_feedback = dmabuf::surface_feedback(
+            &drm_output,
+            self.primary_formats.clone(),
+            self.primary_render_node,
+            render_node,
+        )
+        .ok();
+
+        // If every previous output was removed, this head becomes primary.
+        if self.outputs.is_empty() {
+            self.primary_output = output.clone();
+        }
+        self.outputs.push(output.clone());
+        self.ipc_output_info.push(connector_output_info(
+            name,
+            &connector,
+            Some(mode),
+            offset,
+            VrrInfo {
+                configured: vrr,
+                supported: vrr_is_supported(vrr_support),
+                active: vrr_active,
+            },
+            target.scale,
+        ));
+        self.drm_outputs.push(DrmOutputEntry {
+            gpu_index,
+            render_node,
+            crtc,
+            connector,
+            current_mode: mode,
+            configured_vrr: vrr,
+            vrr_support,
+            vrr_active,
+            vrr_failure_warned_for: None,
+            direct_scanout_active: None,
+            wake: wake::WakeProgress::default(),
+            output: output.clone(),
+            drm_output,
+            dmabuf_feedback,
+            pending: false,
+            deferred_frame: None,
+            dpms_enabled: true,
+            enabled: true,
+            gamma,
+            composed_frame: None,
+        });
+        Ok(output)
+    }
+
+    /// Convenience wrapper feeding a whole scanner event into the hotplug
+    /// plumbing: `Connected` attaches, `Disconnected` removes (see
+    /// [`remove_output`](Self::remove_output)), `Changed` refreshes the
+    /// stored connector info. Returns `Some(output)` only when a new output
+    /// was attached.
+    pub fn attach_scan_event(
+        &mut self,
+        gpu_index: usize,
+        event: DrmScanEvent,
+        outputs_config: &[halley_config::OutputConfig],
+    ) -> Result<Option<Output>, String> {
+        match event {
+            DrmScanEvent::Connected { connector, crtc } => self
+                .attach_output(gpu_index, connector, crtc, outputs_config)
+                .map(Some),
+            DrmScanEvent::Disconnected { connector, .. } => {
+                let name = connector_name(&connector);
+                let output = self
+                    .drm_outputs
+                    .iter()
+                    .find(|entry| entry.output.name() == name)
+                    .map(|entry| entry.output.clone());
+                match output {
+                    Some(output) => Ok(self.remove_output(&output).map(|_| output)),
+                    None => Ok(None),
+                }
+            }
+            DrmScanEvent::Changed { connector, .. } => {
+                let name = connector_name(&connector);
+                if let Some(entry) = self
+                    .drm_outputs
+                    .iter_mut()
+                    .find(|entry| entry.output.name() == name)
+                {
+                    entry.connector = connector;
+                }
+                Ok(None)
+            }
+        }
+    }
+
+    /// Full device-level diff since the last call (retained scanners).
+    /// Each entry is `(gpu_index, event)`.
+    pub fn scan_hotplug_events(&mut self) -> Result<Vec<(usize, DrmScanEvent)>, String> {
+        let mut events = Vec::new();
+        for (gpu_index, gpu) in self.gpus.iter_mut().enumerate() {
+            // The scanner only needs the `ControlDevice` trait of the fd;
+            // constructing a throwaway `DrmDevice` here fails on an
+            // already-composited card (its atomic state snapshot EINVALs).
+            let result = gpu
+                .scanner
+                .scan_connectors(&gpu.drm_fd)
+                .map_err(|err| format!("scan connectors: {err}"))?;
+            for (connector, crtc) in result.connected {
+                events.push((gpu_index, DrmScanEvent::Connected { connector, crtc }));
+            }
+            for (connector, crtc) in result.disconnected {
+                events.push((gpu_index, DrmScanEvent::Disconnected { connector, crtc }));
+            }
+            for (connector, crtc) in result.changed {
+                events.push((gpu_index, DrmScanEvent::Changed { connector, crtc }));
+            }
+        }
+        Ok(events)
+    }
+
+    /// Tear down a disconnected output: clears its KMS compositor state,
+    /// drops scan-out buffers, invalidates all render state (deferred
+    /// frame, retained composition, pending flip, wake progress), and
+    /// removes it from `drm_outputs`/`outputs`/`ipc_output_info`.
+    /// Returns the removed `Output` so the session caller can unmap it
+    /// from `Space` and destroy its `wl_output`; `None` if unknown.
+    ///
+    /// The session caller owns the teardown ordering: it must stop
+    /// rendering to this output before calling. If the removed output was
+    /// primary, the first remaining output (if any) is promoted to
+    /// `primary_output`; with none remaining the stale handle is kept
+    /// (there is no valid replacement) until the next attach.
+    pub fn remove_output(&mut self, output: &Output) -> Option<Output> {
+        let index = self
+            .drm_outputs
+            .iter()
+            .position(|entry| &entry.output == output)?;
+        let mut entry = self.drm_outputs.remove(index);
+        entry.discard_deferred_frame();
+        entry.composed_frame = None;
+        entry.pending = false;
+        entry.wake.reset();
+        entry.direct_scanout_active = None;
+        set_entry_vrr(&mut entry, false);
+        if let Err(err) = entry
+            .drm_output
+            .with_compositor(|compositor| compositor.clear())
+        {
+            eventline::warn!(
+                "output {:?}: failed to clear disconnected connector: {err}",
+                entry.output.name()
+            );
+        }
+        entry.drm_output.reset_buffers();
+        let removed = entry.output.clone();
+        drop(entry);
+
+        self.outputs.retain(|o| o != &removed);
+        self.ipc_output_info
+            .retain(|info| info.name != removed.name());
+        self.power_unavailable.retain(|o| o != &removed);
+        if self.primary_output == removed
+            && let Some(next) = self.outputs.first()
+        {
+            self.primary_output = next.clone();
+        }
+        Some(removed)
+    }
+
     /// Reacquire DRM master and resync KMS state after a VT switch back.
     /// Kept separate from `Renderable` (like `WinitBackend::request_redraw()`)
     /// since there's no shared shape with winit worth forcing into one trait
@@ -1525,6 +1862,7 @@ impl Drop for TtyBackend {
                 drm_fd,
                 drm_output_manager,
                 notifier,
+                scanner: _,
             } = gpu;
             self.gpu_manager.as_mut().remove_node(&render_node);
             // remove_node changes enumeration; refresh to release cached

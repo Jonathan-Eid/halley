@@ -551,6 +551,23 @@ field:
   # collapsed by close-restore-nodes false does not move the camera.
   close-restore-pan "if-offscreen"
 
+  # Linked Field cameras: panning or zooming one monitor moves every other
+  # monitor's Field camera by the same amount at the same zoom, keeping the
+  # layout seam continuous like one wide viewport across the desk. False (the
+  # default) keeps every monitor's camera independent. Fullscreen, Field
+  # maximize, and an open cluster workspace are always monitor-local: they
+  # neither follow nor are followed.
+  linked-cameras false
+
+  # Pan-follow: while a window is carried by a drag-pan edge pan and the
+  # camera scrolls it across the layout seam, the window changes owner to
+  # the adjacent display where it ends up mostly visible, instead of being
+  # stranded off-screen on the display the drag started on. False (the
+  # default) leaves window ownership on the starting display. Cluster
+  # members, fullscreen, maximized, pinned, and pointer-constrained
+  # windows never follow.
+  pan-follow-into-adjacent false
+
   # Camera zoom changes both presentation and input coordinates. Halley only
   # zooms outward: 1.0 is native size, and zooming in walks back toward 1.0
   # without magnifying beyond it.
