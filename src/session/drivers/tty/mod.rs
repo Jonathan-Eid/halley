@@ -890,6 +890,7 @@ pub fn run(explicit_config_path: Option<std::path::PathBuf>) {
                 redraw_queued_outputs(app, &loop_handle);
             }
             crate::ipc::publish_api_events(app);
+            app.session_restore_tick();
             // Every cluster mutation in this iteration is published here rather
             // than at each mutation site.
             super::workspace::sync_ext_workspace(app);

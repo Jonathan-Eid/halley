@@ -402,6 +402,59 @@ pub(crate) fn resize_selected_direction<D: crate::session::SessionDriver>(
     true
 }
 
+/// Sets an ordinary expanded Field node to an exact client size. Used by
+/// manual session restore; interactive resize stays incremental.
+pub(crate) fn set_node_size<D: crate::session::SessionDriver>(
+    session: &mut crate::session::Session<D>,
+    id: NodeId,
+    width: i32,
+    height: i32,
+) -> bool {
+    if width <= 0 || height <= 0 {
+        return false;
+    }
+    let Some(record) = session.nodes.record(id).cloned() else {
+        return false;
+    };
+    if record.collapsed
+        || crate::session::node_user_pinned(session, id)
+        || session.clusters.is_member(id)
+        || session.fullscreen.is_fullscreen_or_pending(&record.surface)
+        || session.maximize.contains(&record.surface)
+    {
+        return false;
+    }
+    let requested = smithay::utils::Size::<i32, Logical>::from((width, height));
+    let size = if crate::xwayland::is_x11(&record.window) {
+        crate::xwayland::constrain_window_size(&record.window, requested)
+    } else {
+        requested
+    };
+    let Some(current) = session.wayland.space.element_geometry(&record.window) else {
+        return false;
+    };
+    if size == current.size {
+        return true;
+    }
+    crate::session::settle_window_movement(session, &record.window);
+    session
+        .interactions
+        .field_arrange
+        .invalidate_surface(&record.surface);
+    if let Some(toplevel) = record.window.toplevel() {
+        toplevel.with_pending_state(|pending| pending.size = Some(size));
+        toplevel.send_pending_configure();
+    } else {
+        crate::xwayland::configure_window(
+            session,
+            &record.window,
+            Rectangle::new(current.loc, size),
+        );
+    }
+    session.request_redraw();
+    true
+}
+
 fn move_node<D: crate::session::SessionDriver>(
     session: &mut crate::session::Session<D>,
     id: NodeId,
@@ -421,7 +474,7 @@ fn move_node<D: crate::session::SessionDriver>(
     place_node(session, id, delta, distance.is_some(), None)
 }
 
-fn place_node<D: crate::session::SessionDriver>(
+pub(crate) fn place_node<D: crate::session::SessionDriver>(
     session: &mut crate::session::Session<D>,
     id: NodeId,
     (dx, dy): (i32, i32),

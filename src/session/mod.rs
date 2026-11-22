@@ -39,6 +39,8 @@ mod autostart;
 mod basics;
 #[path = "protocol/buffer_release.rs"]
 mod buffer_release;
+#[path = "restore.rs"]
+mod restore;
 #[path = "windows/closing.rs"]
 pub(crate) mod closing;
 #[path = "workspace/cluster_runtime.rs"]

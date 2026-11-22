@@ -8,6 +8,7 @@ pub(super) struct LaunchState {
     environment: LaunchEnvironment,
     autostart: Autostart,
     pub(super) clusters: StartupClusters,
+    pub(super) restore: crate::session::restore::RestoreState,
     publish_environment: bool,
 }
 
@@ -21,6 +22,7 @@ impl LaunchState {
             environment,
             autostart,
             clusters: StartupClusters::default(),
+            restore: Default::default(),
             publish_environment,
         }
     }
