@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Add core geometry for projecting one Field onto independent output cameras
+  and checking visibility across them. The compositor still presents each
+  window on its assigned monitor.
 - Add the optional `halley-surface-dismissal-v1` Wayland interface for clients
   watching their own layer surfaces. Outside left presses are one-shot
   notifications; the client owns dismissal and the click keeps its normal target.

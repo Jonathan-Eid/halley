@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use halley_core::camera::Camera;
 use halley_core::field::Vec2;
+use halley_core::viewport::{FieldProjection, Viewport};
 use smithay::utils::{Logical, Physical, Point, Rectangle, Size};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -582,6 +583,27 @@ pub fn global_center(
     ))
 }
 
+/// Adapts today's layout-relative camera to a projection with a Field-space
+/// center. A shared camera can supply its world center without this rebase.
+pub(crate) fn field_viewport(
+    view: OutputView,
+    output_geometry: Rectangle<i32, Logical>,
+) -> Viewport {
+    let center = global_center(view.center, output_geometry);
+    FieldProjection::new(
+        Vec2 {
+            x: center.x,
+            y: center.y,
+        },
+        Vec2 {
+            x: output_geometry.size.w as f32,
+            y: output_geometry.size.h as f32,
+        },
+        view.scale,
+    )
+    .viewport()
+}
+
 /// Returns the portion of global world space currently visible through an
 /// output camera. XDG popup constraints are expressed in the same world
 /// coordinates as `Space`, so their target must follow this inverse of the
@@ -590,14 +612,11 @@ pub fn world_viewport(
     view: OutputView,
     output_geometry: Rectangle<i32, Logical>,
 ) -> Rectangle<i32, Logical> {
-    let center = global_center(view.center, output_geometry);
-    let scale = view.scale.max(f32::EPSILON);
-    let half_width = output_geometry.size.w as f32 / scale / 2.0;
-    let half_height = output_geometry.size.h as f32 / scale / 2.0;
-    let left = (center.x - half_width).floor() as i32;
-    let top = (center.y - half_height).floor() as i32;
-    let right = (center.x + half_width).ceil() as i32;
-    let bottom = (center.y + half_height).ceil() as i32;
+    let rect = field_viewport(view, output_geometry).rect();
+    let left = rect.min.x.floor() as i32;
+    let top = rect.min.y.floor() as i32;
+    let right = rect.max.x.ceil() as i32;
+    let bottom = rect.max.y.ceil() as i32;
 
     Rectangle::new((left, top).into(), (right - left, bottom - top).into())
 }

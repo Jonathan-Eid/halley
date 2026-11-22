@@ -71,6 +71,32 @@ motion algorithms remain in `session::pointer::constraints`; presentation
 adapters may be called by that subsystem, but rendering and refactors must not
 own or duplicate constraint policy.
 
+## Field geometry and output ownership
+
+`halley-core::viewport::FieldProjection` maps a fixed Field position into one
+camera's output-local logical coordinates and back. Its camera center is in
+Field coordinates; output layout position is not an input. Multiple
+projections can therefore see the same footprint without duplicating or moving
+it. `FieldViewScope` tests a footprint across all supplied views or on one
+named output. The caller supplies eligible views; the check knows nothing
+about output power, workspace state, or occlusion.
+
+The compositor still uses layout-relative cameras: `presentation::camera`
+rebases them into Field space for popup constraints and decay visibility.
+Rendering, hit testing, and decay still restrict windows to their assigned
+output. Moving an output still rebases its windows and related state. The
+projection does not enable a shared desktop mode.
+
+Enabling shared views requires one eligibility policy for scene collection,
+pointer routing (including grabs and constraints), and visibility-dependent
+decay. Keep the output that owns a fullscreen, maximize, or cluster
+presentation separate from the outputs that can show an ordinary window, and
+keep keyboard focus on the client distinct from the view used to reach it.
+Output layout changes must no longer relocate shared Field geometry. The TTY
+frame path also needs to schedule commits on all showing outputs while
+selecting a primary output for client pacing, presentation feedback, and
+preferred scale; geometry intersection alone does not establish that policy.
+
 ## Architecture assessment
 
 Architecture quality is assessed per change rather than inferred from file

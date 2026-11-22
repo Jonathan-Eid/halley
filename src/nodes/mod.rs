@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use halley_core::decay::{DecayClass, DecayTracker, TimedDecayPolicy};
 use halley_core::field::{Field, NodeId, NodeState, Vec2};
+use halley_core::viewport::{FieldViewScope, Viewport};
 use smithay::desktop::{PopupManager, Space, Window};
 use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -20,7 +21,6 @@ mod keyboard_navigation;
 mod movement;
 mod session_ops;
 mod session_physics;
-mod visibility;
 pub(crate) use keyboard_navigation::{pan_field, transfer_window};
 
 pub use ipc::handle_request;
@@ -34,7 +34,6 @@ pub use session_ops::{
     reveal_collapsed_node, tick_decay, toggle_focused_on_output,
 };
 pub(crate) use session_ops::{restore_for_cluster_join, set_collapsed_output};
-pub use visibility::DecayView;
 
 #[cfg(test)]
 use session_physics::physics_frame_delta;
@@ -838,7 +837,7 @@ impl NodesState {
 
     pub fn decay_candidates(
         &mut self,
-        views: &HashMap<String, DecayView>,
+        views: &HashMap<String, Viewport>,
         focused: Option<&WlSurface>,
         excluded: impl Fn(NodeId) -> bool,
         protected: impl Fn(&WlSurface) -> bool,
@@ -868,11 +867,17 @@ impl NodesState {
                 DecayClass::Protected
             } else {
                 let node = self.field.node(record.id).expect("record has field node");
-                visibility::classify(
-                    views.get(&record.output).copied(),
+                // Drawing and input remain owner-only until the compositor's
+                // output/presentation routing supports shared views end to end.
+                if FieldViewScope::Output(&record.output).shows(
+                    views,
                     node.pos,
                     node.intrinsic_size,
-                )
+                ) {
+                    DecayClass::OnScreen
+                } else {
+                    DecayClass::OffScreen
+                }
             };
             if self
                 .decay
