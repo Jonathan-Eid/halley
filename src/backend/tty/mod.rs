@@ -1660,11 +1660,12 @@ impl TtyBackend {
     ) -> Result<Vec<(usize, DrmScanEvent)>, String> {
         let mut events = Vec::new();
         for (gpu_index, gpu) in self.gpus.iter_mut().enumerate() {
-            let (drm, _notifier) = DrmDevice::new(gpu.drm_fd.clone(), false)
-                .map_err(|err| format!("scan drm device: {err}"))?;
+            // The scanner only needs the `ControlDevice` trait of the fd;
+            // constructing a throwaway `DrmDevice` here fails on an
+            // already-composited card (its atomic state snapshot EINVALs).
             let result = gpu
                 .scanner
-                .scan_connectors(&drm)
+                .scan_connectors(&gpu.drm_fd)
                 .map_err(|err| format!("scan connectors: {err}"))?;
             for (connector, crtc) in result.connected {
                 events.push((
