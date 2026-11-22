@@ -242,6 +242,9 @@ struct TtyGpu {
     drm_fd: DrmDeviceFd,
     drm_output_manager: TtyDrmOutputManager,
     notifier: Option<DrmDeviceNotifier>,
+    /// Retained across calls so `DrmScanner::scan_connectors` reports
+    /// diffs, not full snapshots. Dropped with the GPU.
+    scanner: DrmScanner,
 }
 
 pub(super) type TtyDrmOutput = DrmOutput<
@@ -336,11 +339,25 @@ pub struct TtyBackend {
     ipc_output_info: Vec<halley_ipc::OutputInfo>,
     power_unavailable: Vec<Output>,
     power_removed_devices: Vec<libc::dev_t>,
+    /// Last applied output hardware config, retained so a hotplugged
+    /// connector is resolved to its configured mode/offset/scale.
+    /// Kept in sync by the session with the config it last applied.
+    applied_output_config: Vec<halley_config::OutputConfig>,
     primary_render_node: DrmNode,
     primary_formats: FormatSet,
 }
 
 impl TtyBackend {
+    /// Retained so hotplugged connectors resolve their mode/offset/scale
+    /// without the session relaying config through every scan event.
+    pub fn set_applied_output_config(&mut self, configs: Vec<halley_config::OutputConfig>) {
+        self.applied_output_config = configs;
+    }
+
+    /// The config slice hotplug attaches resolve against.
+    pub fn configured_outputs_for_hotplug(&self) -> &[halley_config::OutputConfig] {
+        &self.applied_output_config
+    }
     /// Opens the seat and probes every GPU, then initializes each connected
     /// connector with a usable CRTC/mode pair. Notifiers are returned rather than
     /// owned by `TtyBackend` - whatever drives the event loop inserts them,
@@ -389,14 +406,11 @@ impl TtyBackend {
                 ));
                 let (drm, notifier) = DrmDevice::new(drm_fd.clone(), false)?;
                 let mut scanner: DrmScanner = DrmScanner::new();
-                let connected = scanner
-                    .scan_connectors(&drm)?
+                let result = scanner.scan_connectors(&drm)?;
+                let connected = result
+                    .connected
                     .into_iter()
-                    .filter_map(|event| match event {
-                        DrmScanEvent::Connected { connector, crtc } => Some((connector, crtc)),
-                        DrmScanEvent::Disconnected { .. } => None,
-                        DrmScanEvent::Changed { .. } => None,
-                    })
+                    .filter_map(|(connector, crtc)| Some((connector, crtc)))
                     .collect::<Vec<_>>();
                 if connected.is_empty() {
                     return Err("no connected connector found".into());
@@ -587,6 +601,7 @@ impl TtyBackend {
                         drm_fd,
                         drm_output_manager: manager,
                         notifier: Some(notifier),
+                        scanner,
                     },
                     entries,
                     gpu_outputs,
@@ -672,6 +687,7 @@ impl TtyBackend {
             ipc_output_info,
             power_unavailable: Vec::new(),
             power_removed_devices: Vec::new(),
+            applied_output_config: outputs_config.to_vec(),
             primary_render_node,
             primary_formats,
         };
@@ -1637,6 +1653,38 @@ impl TtyBackend {
         }
     }
 
+    /// Full device-level diff since the last call (retained scanners).
+    /// Each entry is `(gpu_index, event)`.
+    pub fn scan_hotplug_events(
+        &mut self,
+    ) -> Result<Vec<(usize, DrmScanEvent)>, String> {
+        let mut events = Vec::new();
+        for (gpu_index, gpu) in self.gpus.iter_mut().enumerate() {
+            let (drm, _notifier) = DrmDevice::new(gpu.drm_fd.clone(), false)
+                .map_err(|err| format!("scan drm device: {err}"))?;
+            let result = gpu
+                .scanner
+                .scan_connectors(&drm)
+                .map_err(|err| format!("scan connectors: {err}"))?;
+            for (connector, crtc) in result.connected {
+                events.push((
+                    gpu_index,
+                    DrmScanEvent::Connected { connector, crtc },
+                ));
+            }
+            for (connector, crtc) in result.disconnected {
+                events.push((
+                    gpu_index,
+                    DrmScanEvent::Disconnected { connector, crtc },
+                ));
+            }
+            for (connector, crtc) in result.changed {
+                events.push((gpu_index, DrmScanEvent::Changed { connector, crtc }));
+            }
+        }
+        Ok(events)
+    }
+
     /// Tear down a disconnected output: clears its KMS compositor state,
     /// drops scan-out buffers, invalidates all render state (deferred
     /// frame, retained composition, pending flip, wake progress), and
@@ -1834,6 +1882,7 @@ impl Drop for TtyBackend {
                 drm_fd,
                 drm_output_manager,
                 notifier,
+                scanner: _,
             } = gpu;
             self.gpu_manager.as_mut().remove_node(&render_node);
             // remove_node changes enumeration; refresh to release cached

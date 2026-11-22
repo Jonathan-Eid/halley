@@ -1235,6 +1235,8 @@ fn apply_runtime_config(app: &mut TtyApp, reload: crate::config::ConfigReload) {
 fn apply_tty_output_config(app: &mut TtyApp, outputs_config: &[halley_config::OutputConfig]) {
     // Retain for hotplug config resolution; see `drm_events`.
     app.driver.applied_output_config = outputs_config.to_vec();
+    app.driver.backend
+        .set_applied_output_config(outputs_config.to_vec());
     let before = app.driver.backend.output_states();
     let pointer_output = app
         .wayland

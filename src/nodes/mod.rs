@@ -18,10 +18,12 @@ mod dynamics_inputs;
 pub(crate) mod ipc;
 mod keyboard_navigation;
 mod movement;
+mod pan_follow;
 mod session_ops;
 mod session_physics;
 mod visibility;
 pub(crate) use keyboard_navigation::{pan_field, transfer_window};
+pub(crate) use pan_follow::maybe_pan_follow;
 
 pub use ipc::handle_request;
 pub(crate) use ipc::move_selected_direction;
