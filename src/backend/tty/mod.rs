@@ -339,11 +339,24 @@ pub struct TtyBackend {
     ipc_output_info: Vec<halley_ipc::OutputInfo>,
     power_unavailable: Vec<Output>,
     power_removed_devices: Vec<libc::dev_t>,
+    /// Last applied output hardware config, retained so a hotplugged
+    /// connector is resolved to its configured mode/offset/scale.
+    /// Kept in sync by the session with the config it last applied.
+    applied_output_config: Vec<halley_config::OutputConfig>,
     primary_render_node: DrmNode,
     primary_formats: FormatSet,
 }
 
 impl TtyBackend {
+    /// Retained so hotplugged connectors resolve their mode/offset/scale.
+    pub fn set_applied_output_config(&mut self, configs: Vec<halley_config::OutputConfig>) {
+        self.applied_output_config = configs;
+    }
+
+    /// The config slice hotplug attaches resolve against.
+    pub fn configured_outputs_for_hotplug(&self) -> &[halley_config::OutputConfig] {
+        &self.applied_output_config
+    }
     /// Opens the seat and probes every GPU, then initializes each connected
     /// connector with a usable CRTC/mode pair. Notifiers are returned rather than
     /// owned by `TtyBackend` - whatever drives the event loop inserts them,
@@ -676,6 +689,7 @@ impl TtyBackend {
             ipc_output_info,
             power_unavailable: Vec::new(),
             power_removed_devices: Vec::new(),
+            applied_output_config: outputs_config.to_vec(),
             primary_render_node,
             primary_formats,
         };
