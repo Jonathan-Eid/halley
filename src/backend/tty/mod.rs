@@ -242,6 +242,9 @@ struct TtyGpu {
     drm_fd: DrmDeviceFd,
     drm_output_manager: TtyDrmOutputManager,
     notifier: Option<DrmDeviceNotifier>,
+    /// Retained across calls so `DrmScanner::scan_connectors` reports
+    /// diffs, not full snapshots. Dropped with the GPU.
+    scanner: DrmScanner,
 }
 
 pub(super) type TtyDrmOutput = DrmOutput<
@@ -587,6 +590,7 @@ impl TtyBackend {
                         drm_fd,
                         drm_output_manager: manager,
                         notifier: Some(notifier),
+                        scanner,
                     },
                     entries,
                     gpu_outputs,
@@ -1858,6 +1862,7 @@ impl Drop for TtyBackend {
                 drm_fd,
                 drm_output_manager,
                 notifier,
+                scanner: _,
             } = gpu;
             self.gpu_manager.as_mut().remove_node(&render_node);
             // remove_node changes enumeration; refresh to release cached
