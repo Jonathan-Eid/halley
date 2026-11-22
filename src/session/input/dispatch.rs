@@ -28,6 +28,7 @@ pub(super) enum SessionControl {
     },
     TransferWindow(halley_config::Direction),
     PanField(halley_config::Direction),
+    Snap(halley_config::Direction),
     ResizeWindow(halley_config::Direction),
     ArrangeVisible,
     UndoArrange,
@@ -75,6 +76,7 @@ pub(super) fn dispatch_action(
         Action::FocusDirection(direction) => return SessionControl::FocusDirection(direction),
         Action::TransferWindow(direction) => return SessionControl::TransferWindow(direction),
         Action::PanField(direction) => return SessionControl::PanField(direction),
+        Action::Snap(direction) => return SessionControl::Snap(direction),
         Action::MoveNode(direction) => return SessionControl::MoveNode(direction),
         Action::MoveNodeBy {
             direction,

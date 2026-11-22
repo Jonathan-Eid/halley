@@ -108,6 +108,10 @@ pub enum Action {
     },
     TransferWindow(Direction),
     PanField(Direction),
+    /// Snap the focused Field window to a half of the output strip
+    /// (`snap-left` / `snap-right` cycle across outputs with wrap;
+    /// `snap-up` / `snap-down` stay on the current output).
+    Snap(Direction),
     /// Resize the focused Field window by one placement step. Left and up
     /// shrink; right and down grow.
     ResizeWindow(Direction),
@@ -180,6 +184,7 @@ impl Action {
             | Self::MoveNodeBy { .. }
             | Self::TransferWindow(_)
             | Self::PanField(_)
+            | Self::Snap(_)
             | Self::ResizeWindow(_)
             | Self::ToggleFocusedPin
             | Self::ArrangeVisible

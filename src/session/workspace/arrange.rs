@@ -424,7 +424,7 @@ fn window_size_is_accepted(window: &Window, requested: Size<i32, Logical>) -> bo
     })
 }
 
-fn visible_work_area_outer(
+pub(crate) fn visible_work_area_outer(
     camera: &Camera,
     output_geometry: Rectangle<i32, Logical>,
     work_area: Rectangle<i32, Logical>,

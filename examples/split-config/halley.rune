@@ -59,6 +59,14 @@ keybinds:
   "$var.mod+alt+right" "node-move right"
   "$var.mod+alt+up" "node-move up"
   "$var.mod+alt+down" "node-move down"
+
+  # Snap to a half of the work area: left/right cycle the output strip,
+  # up/down stay on the current monitor. Return is the Enter key.
+  "ctrl+alt+left" "snap-left"
+  "ctrl+alt+right" "snap-right"
+  "ctrl+alt+up" "snap-up"
+  "ctrl+alt+down" "snap-down"
+  "ctrl+alt+Return" "toggle-fullscreen"
   # "$var.mod+shift+h" "pan-field left" with scope "field"
   # "$var.mod+shift+j" "pan-field down" with scope "field"
   # "$var.mod+shift+k" "pan-field up" with scope "field"

@@ -5,6 +5,7 @@ pub mod decay;
 pub mod field;
 pub mod focus;
 pub mod overlap_physics;
+pub mod snap;
 pub mod trail;
 pub mod viewport;
 pub mod visual;

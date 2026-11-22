@@ -94,6 +94,8 @@ mod render_completion;
 mod restore;
 #[path = "capture/screenshot.rs"]
 mod screenshot;
+#[path = "workspace/snap.rs"]
+mod snap;
 #[path = "startup/spawn.rs"]
 mod spawn;
 #[path = "startup/startup_clusters.rs"]

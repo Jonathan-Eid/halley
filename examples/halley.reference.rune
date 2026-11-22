@@ -941,6 +941,22 @@ keybinds:
   "$var.mod+alt+shift+up" "window-transfer up"
   "$var.mod+alt+shift+down" "window-transfer down"
 
+  # Snap the focused Field window to a half of the work area, flush to the
+  # side, minus field.gap and decorations, as an instant cut. Left/right
+  # cycle through every half of the output strip (outputs sorted by logical
+  # x, each contributing left then right half) with wrap, entering each new
+  # monitor on the half nearest the previous position. Up/down snap to the
+  # top/bottom half of the current monitor only. Pressing the same vertical
+  # direction again unsnaps back to the pre-snap rect. Snapping a fullscreen
+  # or maximized window first exits that presentation via its restore.
+  "ctrl+alt+left" "snap-left"
+  "ctrl+alt+right" "snap-right"
+  "ctrl+alt+up" "snap-up"
+  "ctrl+alt+down" "snap-down"
+  # Second fullscreen chord (Return is the Enter key). Leaving fullscreen
+  # restores the pre-fullscreen geometry recorded on entry.
+  "ctrl+alt+Return" "toggle-fullscreen"
+
   # The same Mod+Ctrl+Arrow chords resize in the Field and reorder tiles in a
   # tiling cluster. Explicit non-overlapping scopes retain both bindings.
   "$var.mod+ctrl+left" "cluster-tile-swap-left" with scope "tile"

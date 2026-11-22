@@ -317,6 +317,15 @@ pub(crate) fn dispatch<D: SessionDriver>(
                 eventline::debug!("pan field: {error}");
             }
         }
+        super::dispatch::SessionControl::Snap(direction) => {
+            if session
+                .clusters
+                .active_on(action_output.as_deref().unwrap_or(""))
+                .is_none()
+            {
+                super::super::snap::snap_window(session, direction, action_output.as_deref());
+            }
+        }
         super::dispatch::SessionControl::MoveNode(direction) => {
             if let Some(output) = action_output
                 && session.clusters.active_on(&output).is_none()
