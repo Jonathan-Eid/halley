@@ -7,6 +7,28 @@ use smithay::wayland::seat::WaylandFocus;
 
 use crate::wayland;
 
+/// Output layout for linked Field cameras: every output's name and layout
+/// position, taken from the live `Space`. Supplied per frame while
+/// `field.linked-cameras` is enabled; `None` keeps cameras independent.
+pub(crate) fn linked_camera_layout<D: SessionDriver>(
+    session: &Session<D>,
+) -> Option<Vec<(String, smithay::utils::Point<i32, smithay::utils::Logical>)>> {
+    if !session.settings.field.linked_cameras {
+        return None;
+    }
+    let space = &session.wayland.space;
+    Some(
+        space
+            .outputs()
+            .filter_map(|output| {
+                space
+                    .output_geometry(output)
+                    .map(|geometry| (output.name(), geometry.loc))
+            })
+            .collect(),
+    )
+}
+
 // Source folders group related session work. Explicit paths keep the existing
 // session module boundaries and visibility while making those groups browsable.
 #[path = "workspace/arrange.rs"]

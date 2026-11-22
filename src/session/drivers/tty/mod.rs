@@ -1363,23 +1363,46 @@ fn redraw_output(app: &mut TtyApp, output: &Output, loop_handle: &LoopHandle<'_,
     let cluster_camera_changed =
         super::sync_cluster_camera(app, &output.name(), target_presentation_time);
     let fullscreen_camera_changed = app.sync_fullscreen_camera(output, target_presentation_time);
-    let zoom_tick =
-        app.cameras
-            .get_mut_for_tick(&output.name())
-            .map(|(camera, fullscreen_returning)| {
-                let before = crate::input::zoom::scale(camera);
-                let (after, animating) = crate::input::zoom::tick_camera(
-                    camera,
-                    fullscreen_returning,
-                    &app.settings.zoom,
-                    app.settings.input.gestures.pan_decay_rate,
-                    dt.as_secs_f32(),
-                );
-                (animating, (before != after).then_some((before, after)))
-            });
-    let camera_animating = zoom_tick.is_some_and(|(animating, _)| animating);
+    let linked_layout = super::linked_camera_layout(app);
+    let zoom_scale_before = app
+        .cameras
+        .get(&output.name())
+        .map(crate::input::zoom::scale);
+    let camera_tick = app.cameras.tick_output(
+        &output.name(),
+        &app.settings.zoom,
+        app.settings.input.gestures.pan_decay_rate,
+        dt.as_secs_f32(),
+        linked_layout.as_deref(),
+    );
+    if camera_tick.linked_changed {
+        // Mirrored Field cameras moved on outputs this redraw pass does not
+        // cover; queue their frames so the linked view actually renders.
+        let mirrored: Vec<_> = app
+            .driver
+            .backend
+            .outputs()
+            .filter(|other| *other != output)
+            .cloned()
+            .collect();
+        for other in mirrored {
+            app.driver.request_redraw(Some(&other));
+        }
+    }
+    let zoom_scale_after = app
+        .cameras
+        .get(&output.name())
+        .map(crate::input::zoom::scale);
+    let camera_animating = camera_tick.animating || camera_tick.linked_changed;
+    let zoom_tick = match (zoom_scale_before, zoom_scale_after) {
+        (Some(before), Some(after)) => (
+            camera_animating,
+            (before != after).then_some((before, after)),
+        ),
+        _ => (camera_animating, None),
+    };
     let edge_pan_animating = super::input::grabbed_window_edge_pan_active_on(app, &output.name());
-    if let Some((before, after)) = zoom_tick.and_then(|(_, scales)| scales) {
+    if let Some((before, after)) = zoom_tick.1 {
         if app.clusters.active_on(&output.name()).is_none() {
             if after < before {
                 crate::nodes::reconcile_landmarks_for_zoom(app, &output.name(), after);
