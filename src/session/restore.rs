@@ -83,7 +83,8 @@ impl RestorePlan {
     fn step<D: SessionDriver>(&mut self, session: &mut Session<D>) {
         let now = Instant::now();
         if let Some(active) = &self.active {
-            if let Some(id) = find_candidate(session, &active.app_id, &active.preexisting, &self.claimed)
+            if let Some(id) =
+                find_candidate(session, &active.app_id, &active.preexisting, &self.claimed)
             {
                 let saved = active.saved.clone();
                 self.claimed.insert(id.as_u64());
@@ -100,11 +101,16 @@ impl RestorePlan {
             return;
         }
 
-        while let Some(PendingLaunch { record: saved, command }) = self.pending.pop_front() {
+        while let Some(PendingLaunch {
+            record: saved,
+            command,
+        }) = self.pending.pop_front()
+        {
             if saved.app_id.is_empty() {
                 continue;
             }
-            if let Some(id) = find_candidate(session, &saved.app_id, &HashSet::new(), &self.claimed) {
+            if let Some(id) = find_candidate(session, &saved.app_id, &HashSet::new(), &self.claimed)
+            {
                 self.claimed.insert(id.as_u64());
                 place_window(session, id, &saved);
                 continue;
@@ -113,7 +119,11 @@ impl RestorePlan {
                 eventline::warn!("session restore: no Wayland display name; aborting");
                 return;
             };
-            let preexisting = session.nodes.records().map(|record| record.id.as_u64()).collect();
+            let preexisting = session
+                .nodes
+                .records()
+                .map(|record| record.id.as_u64())
+                .collect();
             let x11_display = session.xwayland.display_name();
             let app_id = saved.app_id.clone();
             eventline::info!(
@@ -172,7 +182,10 @@ fn place_window<D: SessionDriver>(session: &mut Session<D>, id: NodeId, saved: &
     };
     let origin = output_origin(session, &output).or_else(|| output_origin(session, &record.output));
     let Some(origin) = origin else {
-        eventline::warn!("session restore: output {:?} is not present; leaving node in place", output);
+        eventline::warn!(
+            "session restore: output {:?} is not present; leaving node in place",
+            output
+        );
         return;
     };
     let destination = Point::from((origin.x + saved.x, origin.y + saved.y));
@@ -192,7 +205,10 @@ fn place_window<D: SessionDriver>(session: &mut Session<D>, id: NodeId, saved: &
     );
 }
 
-fn output_origin<D: SessionDriver>(session: &Session<D>, name: &str) -> Option<Point<i32, Logical>> {
+fn output_origin<D: SessionDriver>(
+    session: &Session<D>,
+    name: &str,
+) -> Option<Point<i32, Logical>> {
     session
         .wayland
         .space
@@ -237,8 +253,12 @@ pub(crate) fn save<D: SessionDriver>(session: &mut Session<D>) -> io::Result<(Pa
         });
     }
     windows.sort_by(|a, b| {
-        (a.output.as_str(), a.x, a.y, a.title.as_str())
-            .cmp(&(b.output.as_str(), b.x, b.y, b.title.as_str()))
+        (a.output.as_str(), a.x, a.y, a.title.as_str()).cmp(&(
+            b.output.as_str(),
+            b.x,
+            b.y,
+            b.title.as_str(),
+        ))
     });
 
     let file = SessionFile {
@@ -280,7 +300,10 @@ pub(crate) fn load<D: SessionDriver>(session: &mut Session<D>) -> io::Result<usi
     let mut pending = VecDeque::new();
     for window in file.windows {
         match resolve_command(&window.app_id) {
-            Some(command) => pending.push_back(PendingLaunch { record: window, command }),
+            Some(command) => pending.push_back(PendingLaunch {
+                record: window,
+                command,
+            }),
             None => skipped.push(window),
         }
     }

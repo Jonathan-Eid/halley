@@ -161,10 +161,7 @@ pub fn parse(args: &[String]) -> Result<Action, String> {
 }
 
 fn parse_session(args: &[String]) -> Result<Action, String> {
-    if args
-        .iter()
-        .any(|arg| arg == "-h" || arg == "--help")
-    {
+    if args.iter().any(|arg| arg == "-h" || arg == "--help") {
         return Ok(Action::SessionHelp);
     }
     if args.len() > 1 {

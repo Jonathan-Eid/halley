@@ -832,15 +832,15 @@ pub fn handle_request<D: crate::session::SessionDriver>(
                     path: path.display().to_string(),
                     windows,
                 },
-                Err(error) => halley_ipc::Response::Error(format!(
-                    "could not save session snapshot: {error}"
-                )),
+                Err(error) => {
+                    halley_ipc::Response::Error(format!("could not save session snapshot: {error}"))
+                }
             },
             halley_ipc::SessionRequest::Load => match app.session_load() {
                 Ok(windows) => halley_ipc::Response::SessionLoaded { windows },
-                Err(error) => halley_ipc::Response::Error(format!(
-                    "could not load session snapshot: {error}"
-                )),
+                Err(error) => {
+                    halley_ipc::Response::Error(format!("could not load session snapshot: {error}"))
+                }
             },
         },
         halley_ipc::Request::ConfigReload => match app.config_source.request_reload() {

@@ -39,8 +39,6 @@ mod autostart;
 mod basics;
 #[path = "protocol/buffer_release.rs"]
 mod buffer_release;
-#[path = "restore.rs"]
-mod restore;
 #[path = "windows/closing.rs"]
 pub(crate) mod closing;
 #[path = "workspace/cluster_runtime.rs"]
@@ -92,6 +90,8 @@ mod protocol;
 mod protocol_setup;
 #[path = "display/render_completion.rs"]
 mod render_completion;
+#[path = "restore.rs"]
+mod restore;
 #[path = "capture/screenshot.rs"]
 mod screenshot;
 #[path = "startup/spawn.rs"]

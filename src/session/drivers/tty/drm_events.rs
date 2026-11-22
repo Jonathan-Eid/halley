@@ -172,8 +172,8 @@ fn handle_scan_event(app: &mut TtyApp, gpu_index: usize, event: DrmScanEvent) {
     match event {
         DrmScanEvent::Connected { connector, crtc } => {
             let name = connector_name(&connector);
-            let configured = resolve_output_config(&app.driver.applied_output_config, &name)
-                .cloned();
+            let configured =
+                resolve_output_config(&app.driver.applied_output_config, &name).cloned();
             match app.driver.backend.apply_hotplug_connector(
                 gpu_index,
                 connector,
@@ -197,8 +197,8 @@ fn handle_scan_event(app: &mut TtyApp, gpu_index: usize, event: DrmScanEvent) {
         }
         DrmScanEvent::Changed { connector, crtc } => {
             let name = connector_name(&connector);
-            let configured = resolve_output_config(&app.driver.applied_output_config, &name)
-                .cloned();
+            let configured =
+                resolve_output_config(&app.driver.applied_output_config, &name).cloned();
             match app.driver.backend.apply_hotplug_changed(
                 gpu_index,
                 connector,
@@ -219,10 +219,7 @@ fn dispatch_applied(app: &mut TtyApp, verb: &str, applied: &[(Output, HotplugSid
     }
     let mut layout_changed = false;
     for (output, effect) in applied {
-        eventline::info!(
-            "hotplug: {verb} output {:?} ({effect:?})",
-            output.name()
-        );
+        eventline::info!("hotplug: {verb} output {:?} ({effect:?})", output.name());
         match effect {
             HotplugSideEffect::Added => {
                 register_new_output(app, output);
@@ -273,9 +270,7 @@ fn register_new_output(app: &mut TtyApp, output: &Output) {
     // Fresh camera at rest, exactly like startup's `cameras.insert`.
     app.cameras
         .insert(output.name(), geometry.size.to_physical(1));
-    let external = app
-        .fullscreen
-        .reconfigure_output(&app.wayland, output);
+    let external = app.fullscreen.reconfigure_output(&app.wayland, output);
     crate::xwayland::reconfigure_fullscreen(external);
 
     // Reuse the config path so any later config reload that touches this
@@ -324,8 +319,7 @@ fn unregister_output(app: &mut TtyApp, output: &Output) {
         .space
         .elements()
         .filter(|window| {
-            crate::wayland::window_output_name(window)
-                .is_some_and(|name| name == output.name())
+            crate::wayland::window_output_name(window).is_some_and(|name| name == output.name())
         })
         .cloned()
         .collect();

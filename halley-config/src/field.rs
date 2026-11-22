@@ -247,9 +247,7 @@ pub fn parse_field_checked(config: &RuneConfig) -> Result<Field, FieldParseError
             .unwrap_or(defaults.linked_cameras),
         pan_follow_into_adjacent: config
             .get_optional::<bool>("field.pan-follow-into-adjacent")
-            .map_err(|error| {
-                FieldParseError(format!("field.pan-follow-into-adjacent: {error}"))
-            })?
+            .map_err(|error| FieldParseError(format!("field.pan-follow-into-adjacent: {error}")))?
             .unwrap_or(defaults.pan_follow_into_adjacent),
         zoom: Zoom {
             enabled: canonical_or_legacy_bool(

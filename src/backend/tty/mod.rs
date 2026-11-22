@@ -1534,8 +1534,7 @@ impl TtyBackend {
 
         let vrr_support = query_vrr_support(&drm_output, connector.handle(), &name);
         let requested_vrr = configured_vrr_target(vrr, false, vrr_support);
-        if let Err(err) = drm_output
-            .with_compositor(|compositor| compositor.use_vrr(requested_vrr))
+        if let Err(err) = drm_output.with_compositor(|compositor| compositor.use_vrr(requested_vrr))
         {
             eventline::warn!(
                 "output {name:?}: failed to set initial VRR state to {requested_vrr}: {err}"
@@ -1607,10 +1606,9 @@ impl TtyBackend {
         outputs_config: &[halley_config::OutputConfig],
     ) -> Result<Option<Output>, String> {
         match event {
-            DrmScanEvent::Connected { connector, crtc } => {
-                self.attach_output(gpu_index, connector, crtc, outputs_config)
-                    .map(Some)
-            }
+            DrmScanEvent::Connected { connector, crtc } => self
+                .attach_output(gpu_index, connector, crtc, outputs_config)
+                .map(Some),
             DrmScanEvent::Disconnected { connector, .. } => {
                 let name = connector_name(&connector);
                 let output = self
@@ -1635,6 +1633,31 @@ impl TtyBackend {
                 Ok(None)
             }
         }
+    }
+
+    /// Full device-level diff since the last call (retained scanners).
+    /// Each entry is `(gpu_index, event)`.
+    pub fn scan_hotplug_events(&mut self) -> Result<Vec<(usize, DrmScanEvent)>, String> {
+        let mut events = Vec::new();
+        for (gpu_index, gpu) in self.gpus.iter_mut().enumerate() {
+            // The scanner only needs the `ControlDevice` trait of the fd;
+            // constructing a throwaway `DrmDevice` here fails on an
+            // already-composited card (its atomic state snapshot EINVALs).
+            let result = gpu
+                .scanner
+                .scan_connectors(&gpu.drm_fd)
+                .map_err(|err| format!("scan connectors: {err}"))?;
+            for (connector, crtc) in result.connected {
+                events.push((gpu_index, DrmScanEvent::Connected { connector, crtc }));
+            }
+            for (connector, crtc) in result.disconnected {
+                events.push((gpu_index, DrmScanEvent::Disconnected { connector, crtc }));
+            }
+            for (connector, crtc) in result.changed {
+                events.push((gpu_index, DrmScanEvent::Changed { connector, crtc }));
+            }
+        }
+        Ok(events)
     }
 
     /// Tear down a disconnected output: clears its KMS compositor state,
@@ -1675,7 +1698,8 @@ impl TtyBackend {
         drop(entry);
 
         self.outputs.retain(|o| o != &removed);
-        self.ipc_output_info.retain(|info| info.name != removed.name());
+        self.ipc_output_info
+            .retain(|info| info.name != removed.name());
         self.power_unavailable.retain(|o| o != &removed);
         if self.primary_output == removed
             && let Some(next) = self.outputs.first()

@@ -99,9 +99,7 @@ pub(crate) fn maybe_pan_follow<D: crate::session::SessionDriver>(
     // Same exclusions as `transfer_window`: cluster membership, fullscreen
     // (incl. pending), and Field maximize keep their own presentation.
     if session.clusters.cluster_for_member(id).is_some()
-        || session
-            .fullscreen
-            .is_fullscreen_or_pending(&record.surface)
+        || session.fullscreen.is_fullscreen_or_pending(&record.surface)
         || session.maximize.contains(&record.surface)
     {
         return false;
@@ -191,7 +189,10 @@ mod tests {
 
     /// Two 1920x1080 displays tiled at the origin: left shows [-960, 960],
     /// right shows [960, 2880] once both cameras are at rest.
-    fn side_by_side() -> (Rectangle<i32, Logical>, Vec<(String, Rectangle<i32, Logical>)>) {
+    fn side_by_side() -> (
+        Rectangle<i32, Logical>,
+        Vec<(String, Rectangle<i32, Logical>)>,
+    ) {
         (
             rect(-960, -540, 1920, 1080),
             vec![("right".to_string(), rect(960, -540, 1920, 1080))],
