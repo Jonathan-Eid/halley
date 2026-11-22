@@ -684,6 +684,10 @@ pub(crate) fn tick_grabbed_window_edge_pan<D: SessionDriver>(
             });
         }
     }
+    // Opt-in: a window carried across the layout seam follows the camera
+    // onto the display it now mostly overlaps instead of stranding it on
+    // the output the drag started on.
+    let _ = crate::nodes::maybe_pan_follow(session, id);
     Some(edge_pan.output)
 }
 
