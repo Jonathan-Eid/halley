@@ -26,7 +26,7 @@ fn example_config_parses_end_to_end() {
     let keybinds = parse_keybinds(&config).expect("example keybinds section parses");
 
     assert_eq!(keybinds.modifier, ModifierKey::Super);
-    assert_eq!(keybinds.binds.len(), 66);
+    assert_eq!(keybinds.binds.len(), 71);
 
     let arrange = keybinds
         .binds
@@ -87,6 +87,32 @@ fn example_config_parses_end_to_end() {
     assert_eq!(fullscreen.key, "f");
     assert!(fullscreen.modifiers.super_key);
     assert!(!fullscreen.modifiers.shift);
+    // Second fullscreen chord: Ctrl+Alt+Return (Enter).
+    let fullscreen_alt = keybinds
+        .binds
+        .iter()
+        .find(|b| b.action == Action::ToggleFullscreen && b.key == "Return")
+        .expect("ctrl+alt+Return toggle-fullscreen bind present");
+    assert!(fullscreen_alt.modifiers.ctrl && fullscreen_alt.modifiers.alt);
+    assert!(!fullscreen_alt.modifiers.super_key);
+    // Snap bindings: Ctrl+Alt+Arrow, Field scope, one press per step.
+    for (key, direction) in [
+        ("left", Direction::Left),
+        ("right", Direction::Right),
+        ("up", Direction::Up),
+        ("down", Direction::Down),
+    ] {
+        let bind = keybinds
+            .binds
+            .iter()
+            .find(|b| b.action == Action::Snap(direction))
+            .expect("snap bind present");
+        assert_eq!(bind.key, key);
+        assert!(bind.modifiers.ctrl && bind.modifiers.alt);
+        assert!(!bind.modifiers.super_key);
+        assert_eq!(bind.scope, halley_config::BindingScope::Field);
+        assert!(!bind.repeat);
+    }
 
     let maximize = keybinds
         .binds

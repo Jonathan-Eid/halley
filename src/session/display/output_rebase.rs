@@ -38,6 +38,9 @@ impl<D: SessionDriver> Session<D> {
         self.interactions
             .field_arrange
             .translate_output(output, delta);
+        self.interactions
+            .field_snap
+            .translate_output(output, delta.x, delta.y);
         self.shell.cluster_composer.translate_output(output, delta);
         self.interactions
             .translate_output_grab(output, delta, &self.nodes);

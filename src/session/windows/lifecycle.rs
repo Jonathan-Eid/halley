@@ -418,6 +418,7 @@ pub(crate) fn finish_window_unmap<D: SessionDriver>(
         .interactions
         .field_arrange
         .invalidate_surface(&surface);
+    crate::session::snap::invalidate_surface(session, &surface);
     session.wayland.managed_windows.remove(&surface);
     session
         .presentation_close_size_recovery

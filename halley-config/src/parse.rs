@@ -198,6 +198,41 @@ fn movement_action(s: &str) -> Option<Result<Action, String>> {
     })
 }
 
+/// `snap-DIRECTION`, or `None` for any other action. Malformed snap
+/// spellings (bare `snap`, unknown direction, extra arguments) are config
+/// errors, not shell commands, so a typo fails verification instead of
+/// silently spawning a program.
+fn snap_action(s: &str) -> Option<Result<Action, String>> {
+    let words = s.split_whitespace().collect::<Vec<_>>();
+    let is_snap = s == "snap"
+        || s.starts_with("snap-")
+        || s.starts_with("snap ")
+        || words.first() == Some(&"snap");
+    if !is_snap {
+        return None;
+    }
+    // Canonical forms are exactly `snap-left|right|up|down` with no extra
+    // words. The dashed-first-word fallback in `parse_action_checked`
+    // already rewrites `snap_left` to `snap-left` before this runs for
+    // non-built-ins, and `snap left` is accepted as a spaced spelling.
+    let direction = match words.as_slice() {
+        ["snap-left"] => crate::Direction::Left,
+        ["snap-right"] => crate::Direction::Right,
+        ["snap-up"] => crate::Direction::Up,
+        ["snap-down"] => crate::Direction::Down,
+        ["snap", "left"] => crate::Direction::Left,
+        ["snap", "right"] => crate::Direction::Right,
+        ["snap", "up"] => crate::Direction::Up,
+        ["snap", "down"] => crate::Direction::Down,
+        _ => {
+            return Some(Err(
+                "snap requires left, right, up, or down with no extra arguments".into(),
+            ));
+        }
+    };
+    Some(Ok(Action::Snap(direction)))
+}
+
 /// Parse a keybind action. Anything that is not a built-in action, in its
 /// current or an older spelling, is a shell command.
 pub(crate) fn parse_action_checked(s: &str) -> Result<Action, String> {
@@ -225,7 +260,9 @@ pub(crate) fn parse_action(s: &str) -> Action {
 fn parse_spelling(s: &str) -> Result<Action, String> {
     let current = current_spelling(s);
     let s = current.as_deref().unwrap_or(s);
-    movement_action(s).unwrap_or_else(|| Ok(parse_current(s)))
+    movement_action(s)
+        .or_else(|| snap_action(s))
+        .unwrap_or_else(|| Ok(parse_current(s)))
 }
 
 fn dash_first_word(s: &str) -> String {
@@ -660,6 +697,64 @@ end
             Action::ClusterTileSwap(crate::Direction::Left)
         );
         assert_eq!(kb.binds[2].scope, BindingScope::Stack);
+    }
+
+    #[test]
+    fn parses_snap_actions_with_field_scope_and_no_repeat() {
+        let kb = parse(
+            r#"
+keybinds:
+  mod "super"
+  "ctrl+alt+left" "snap-left"
+  "ctrl+alt+right" "snap-right"
+  "ctrl+alt+up" "snap-up"
+  "ctrl+alt+down" "snap-down"
+  "ctrl+alt+Return" "toggle-fullscreen"
+  "super+left" "snap_left"
+end
+"#,
+        );
+        assert_eq!(kb.binds.len(), 6);
+        for (bind, direction) in kb.binds[..4].iter().zip([
+            crate::Direction::Left,
+            crate::Direction::Right,
+            crate::Direction::Up,
+            crate::Direction::Down,
+        ]) {
+            assert_eq!(bind.action, Action::Snap(direction));
+            assert_eq!(bind.scope, BindingScope::Field);
+            assert!(!bind.repeat, "snap cycling is one press per step");
+            assert!(bind.modifiers.ctrl && bind.modifiers.alt);
+            assert!(!bind.modifiers.super_key);
+        }
+        assert_eq!(kb.binds[4].action, Action::ToggleFullscreen);
+        assert_eq!(kb.binds[5].action, Action::Snap(crate::Direction::Left));
+    }
+
+    #[test]
+    fn malformed_snap_actions_fail_verification() {
+        for action in [
+            "snap",
+            "snap-",
+            "snap-foo",
+            "snap-left extra",
+            "snap left right",
+        ] {
+            let config = RuneConfig::from_str(&format!(
+                "keybinds:\n  \"ctrl+alt+left\" \"{action}\"\nend\n"
+            ))
+            .expect("valid rune-cfg source");
+            let err = parse_keybinds(&config).expect_err("malformed snap must fail");
+            assert!(
+                format!("{err}").contains("invalid keybind"),
+                "{action:?}: {err}"
+            );
+        }
+        // A command that merely starts with the letters s-n-a-p stays a command.
+        assert_eq!(
+            parse_action_checked("snapshot-tool --now"),
+            Ok(Action::Spawn("snapshot-tool --now".into()))
+        );
     }
 
     #[test]

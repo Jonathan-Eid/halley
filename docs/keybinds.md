@@ -355,7 +355,7 @@ The built-in action strings are `quit`, `close-focused`, `toggle-fullscreen`,
 Parameterized actions also include `cluster-slot-N` (1 to 10),
 `focus-DIRECTION`, `cluster-focus-DIRECTION`, `cluster-tile-swap-DIRECTION`,
 `node-move DIRECTION [UNITS]`, `resize-window-DIRECTION`,
-`window-transfer DIRECTION`, `pan-field DIRECTION`, and
+`snap-DIRECTION`, `window-transfer DIRECTION`, `pan-field DIRECTION`, and
 `monitor-focus DIRECTION` (or an output name), where `DIRECTION` is
 `left`, `right`, `up`, or `down`. Any other string runs as a shell command. The default `Mod+Arrow` `focus-DIRECTION`
 walks spatially among expanded windows, collapsed nodes, and collapsed cluster
@@ -389,6 +389,43 @@ aliases (`node move right 10`, `move right 10`, and `node-move-right 10`, for
 example) also accept distances. Invalid distances fail configuration verification.
 The reference config uses `Mod+Alt+Shift+Arrow` for monitor transfer, so it is
 not a second movement-speed binding there.
+
+`snap-left` / `snap-right` / `snap-up` / `snap-down` snap the focused Field
+window to a half of the field work area minus `field.gap` and decorations,
+flush to the side, as an instant cut with no slide. They are Field-scoped
+and have no default binding; the reference config binds them next to the
+other window actions as follows (the `Return` trigger is the Enter key).
+`toggle-fullscreen` is bound to `Ctrl+Alt+Return` there as a second chord
+beside `Mod+F`; leaving fullscreen with either chord restores the
+pre-fullscreen geometry recorded on entry.
+
+```rune
+"ctrl+alt+left" "snap-left"
+"ctrl+alt+right" "snap-right"
+"ctrl+alt+up" "snap-up"
+"ctrl+alt+down" "snap-down"
+"ctrl+alt+Return" "toggle-fullscreen"
+```
+
+Left and right cycle through every half of the full logical output strip in
+the travel direction with wrap. The strip is the connected outputs sorted by
+their logical x offsets, each contributing its left half then its right
+half. Entering a new monitor lands on the half nearest your previous
+position, then successive presses toggle halves inside that monitor before
+leaving its far edge: with outputs at x 0, 1920, and 5383, pressing left on
+a window centred on the middle output goes to that output's left half, then
+the leftmost output's right half, then its left half, then wraps to the
+rightmost output's right half, and so on. Up and down snap to the top or
+bottom half of the current monitor only and never cycle across outputs.
+Snap state is stored per window, so successive presses continue the cycle;
+pressing the same vertical direction again while snapped to that half
+unsnaps back to the pre-snap rect. Manually moving or resizing a snapped
+window discards its snap state without restoring. Snapping a fullscreen or
+maximized window first exits that presentation through the existing restore
+mechanics, then applies the snap. Collapsed nodes, cluster members, pinned
+windows, and windows on an output owned by an active cluster workspace do
+not snap. Snap bindings are one press per step by default (they do not
+repeat while held); add `with repeat true` to cycle continuously.
 
 Field `resize-window` uses `left`/`up` to
 shrink and `right`/`down` to grow, sharing `Mod+Ctrl+Arrow` with scoped tile
