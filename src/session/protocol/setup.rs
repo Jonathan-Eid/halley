@@ -53,6 +53,7 @@ impl<D: SessionDriver> Session<D> {
         );
 
         crate::wayland::surface_dismissal::create_global::<Self>(&display_handle);
+        smithay::wayland::tablet_manager::TabletManagerState::new::<Self>(&display_handle);
 
         WaylandState::new(
             display_handle.clone(),

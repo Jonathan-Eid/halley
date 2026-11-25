@@ -744,6 +744,14 @@ fn native_connection(fixture: &Fixture) -> (EventQueue<NativeState>, NativeState
     (queue, state)
 }
 
+#[test]
+#[ignore = "requires a Wayland desktop and XWayland; starts an isolated nested compositor"]
+fn tablet_v2_is_advertised_to_clients() {
+    let fixture = Fixture::new("stacking");
+    let (_, client) = native_connection(&fixture);
+    assert!(client.globals.contains_key("zwp_tablet_manager_v2"));
+}
+
 fn observe_keyboard(
     queue: &mut EventQueue<NativeState>,
     state: &mut NativeState,
