@@ -15,7 +15,7 @@ impl Input {
         socket.connect(fixture.path.join("input.sock")).unwrap();
         Self(socket)
     }
-    fn command(&self, command: &str) -> Value {
+    pub(super) fn command(&self, command: &str) -> Value {
         self.0.send(command.as_bytes()).unwrap();
         let mut bytes = [0; 32_768];
         let size = self.0.recv(&mut bytes).unwrap();

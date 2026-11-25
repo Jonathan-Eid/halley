@@ -1011,6 +1011,9 @@ where
     D: SessionDriver,
     B: InputBackend,
 {
+    if super::tablet::device_event(session, event) {
+        return;
+    }
     if !crate::input::virtual_keyboard::restore(session) {
         return;
     }
@@ -1048,7 +1051,7 @@ where
     if modal::intercept_early(session, event) {
         return;
     }
-    if super::touch::handle(session, event) || super::gesture::handle(session, event) {
+    if super::tablet::handle(session, event) || super::touch::handle(session, event) || super::gesture::handle(session, event) {
         return;
     }
     let position_before = session.pointer.position();

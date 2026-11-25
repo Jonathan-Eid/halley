@@ -403,6 +403,7 @@ pub fn run(explicit_config_path: Option<std::path::PathBuf>) {
         capture: crate::capture::CaptureState::default(),
         interactions: super::InteractionState::default(),
         touch: super::touch::TouchState::default(),
+        tablet_proximity: Default::default(),
         gestures: super::gesture::GestureState::default(),
         window_trace: super::trace::WindowTrace::from_env(),
         keyboard_monitor: {

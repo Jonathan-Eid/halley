@@ -3,9 +3,14 @@
 //! unchanged; the extra output is offscreen and input is isolated from the host.
 use super::*;
 use calloop::{Interest, Mode, PostAction, generic::Generic};
+use smithay::backend::input::{AbsolutePositionEvent, Device, DeviceCapability};
 use smithay::backend::input::{
     ButtonState, Event, InputBackend, InputEvent, InputTime, KeyState, KeyboardKeyEvent, Keycode,
     PointerButtonEvent, PointerMotionEvent, UnusedEvent,
+};
+use smithay::backend::input::{
+    ProximityState, TabletToolAxisEvent, TabletToolCapabilities, TabletToolDescriptor,
+    TabletToolEvent, TabletToolProximityEvent, TabletToolType,
 };
 use smithay::backend::winit::WinitVirtualDevice;
 use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Subpixel};
@@ -128,6 +133,26 @@ pub(super) fn install(app: &mut App, handle: &LoopHandle<'static, App>) {
                 let event = TestButton { code: parts[1].parse().unwrap(), pressed: parts[2] == "down", time: app.start_time.elapsed().as_millis() as u32 };
                 let socket_name = app.wayland_display.clone().unwrap();
                 super::super::input::handle::<_, TestInput>(app, &InputEvent::PointerButton { event }, &socket_name);
+            } else if parts.first() == Some(&"tablet-add") || parts.first() == Some(&"tablet-remove") {
+                assert_eq!(parts.len(), 2);
+                let device = TestDevice::Tablet(parts[1].parse().unwrap());
+                let event = if parts[0] == "tablet-add" { InputEvent::DeviceAdded { device } } else { InputEvent::DeviceRemoved { device } };
+                let socket_name = app.wayland_display.clone().unwrap();
+                super::super::input::handle::<_, TestInput>(app, &event, &socket_name);
+            } else if parts.first() == Some(&"tablet-proximity") || parts.first() == Some(&"tablet-axis") {
+                // id tool x y pressure state; coordinates and pressure are normalized.
+                assert_eq!(parts.len(), 7);
+                let event = TestTablet {
+                    device: parts[1].parse().unwrap(), tool: parts[2].parse().unwrap(),
+                    x: parts[3].parse().unwrap(), y: parts[4].parse().unwrap(),
+                    pressure: parts[5].parse().unwrap(),
+                    proximity: match parts[6] { "in" => ProximityState::In, "out" => ProximityState::Out, _ => panic!("invalid proximity") },
+                    time: app.start_time.elapsed().as_millis() as u32,
+                };
+                assert!((0.0..=1.0).contains(&event.x) && (0.0..=1.0).contains(&event.y) && (0.0..=1.0).contains(&event.pressure));
+                let socket_name = app.wayland_display.clone().unwrap();
+                let input = if parts[0] == "tablet-axis" { InputEvent::TabletToolAxis { event } } else { InputEvent::TabletToolProximity { event } };
+                super::super::input::handle::<_, TestInput>(app, &input, &socket_name);
             } else if parts.first() == Some(&"layout") {
                 use crate::session::state::OutputDriver;
                 assert_eq!(parts.len(), 5);
@@ -175,7 +200,8 @@ pub(super) fn install(app: &mut App, handle: &LoopHandle<'static, App>) {
                 crate::capture::CaptureOverlay::Region(rect) => Some([rect.loc.x, rect.loc.y, rect.size.w, rect.size.h]),
                 _ => None,
             };
-            let reply = serde_json::json!({"layout_error": layout_error, "open": app.shell.focus_cycle.is_open(), "active": app.shell.focus_cycle.is_active(),
+            let primary_geometry = app.wayland.space.output_geometry(&primary).unwrap();
+            let reply = serde_json::json!({"primary_geometry": [primary_geometry.loc.x, primary_geometry.loc.y, primary_geometry.size.w, primary_geometry.size.h], "layout_error": layout_error, "open": app.shell.focus_cycle.is_open(), "active": app.shell.focus_cycle.is_active(),
                 "empty_cluster": app.wayland.space.outputs().filter_map(|output| {
                     let snapshot = app.shell.overlays.snapshot(&output.name(), now).empty_cluster?;
                     Some(serde_json::json!({"output": output.name(), "shortcut": snapshot.shortcut, "armed": snapshot.armed}))
@@ -233,8 +259,8 @@ impl Event<TestInput> for TestMotion {
     fn time(&self) -> InputTime {
         InputTime::from_millis(self.time)
     }
-    fn device(&self) -> WinitVirtualDevice {
-        WinitVirtualDevice
+    fn device(&self) -> TestDevice {
+        TestDevice::Winit
     }
 }
 impl PointerMotionEvent<TestInput> for TestMotion {
@@ -261,8 +287,8 @@ impl Event<TestInput> for TestButton {
     fn time(&self) -> InputTime {
         InputTime::from_millis(self.time)
     }
-    fn device(&self) -> WinitVirtualDevice {
-        WinitVirtualDevice
+    fn device(&self) -> TestDevice {
+        TestDevice::Winit
     }
 }
 impl PointerButtonEvent<TestInput> for TestButton {
@@ -288,8 +314,8 @@ impl Event<TestInput> for TestKey {
     fn time(&self) -> InputTime {
         InputTime::from_millis(self.time)
     }
-    fn device(&self) -> WinitVirtualDevice {
-        WinitVirtualDevice
+    fn device(&self) -> TestDevice {
+        TestDevice::Winit
     }
 }
 impl KeyboardKeyEvent<TestInput> for TestKey {
@@ -308,7 +334,7 @@ impl KeyboardKeyEvent<TestInput> for TestKey {
     }
 }
 impl InputBackend for TestInput {
-    type Device = WinitVirtualDevice;
+    type Device = TestDevice;
     type KeyboardKeyEvent = TestKey;
     type PointerAxisEvent = UnusedEvent;
     type PointerButtonEvent = TestButton;
@@ -327,10 +353,143 @@ impl InputBackend for TestInput {
     type TouchMotionEvent = UnusedEvent;
     type TouchCancelEvent = UnusedEvent;
     type TouchFrameEvent = UnusedEvent;
-    type TabletToolAxisEvent = UnusedEvent;
-    type TabletToolProximityEvent = UnusedEvent;
+    type TabletToolAxisEvent = TestTablet;
+    type TabletToolProximityEvent = TestTablet;
     type TabletToolTipEvent = UnusedEvent;
     type TabletToolButtonEvent = UnusedEvent;
     type SwitchToggleEvent = UnusedEvent;
     type SpecialEvent = UnusedEvent;
+}
+
+// The winit stream retains its original capabilities; synthetic tablets have
+// stable distinct identities, without falsely presenting as mice or keyboards.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum TestDevice {
+    Winit,
+    Tablet(u32),
+}
+impl Device for TestDevice {
+    fn id(&self) -> String {
+        match self {
+            Self::Winit => WinitVirtualDevice.id(),
+            Self::Tablet(id) => format!("test-tablet-{id}"),
+        }
+    }
+    fn name(&self) -> String {
+        match self {
+            Self::Winit => WinitVirtualDevice.name(),
+            Self::Tablet(id) => format!("Test tablet {id}"),
+        }
+    }
+    fn has_capability(&self, capability: DeviceCapability) -> bool {
+        match self {
+            Self::Winit => WinitVirtualDevice.has_capability(capability),
+            Self::Tablet(_) => capability == DeviceCapability::TabletTool,
+        }
+    }
+    fn usb_id(&self) -> Option<(u32, u32)> {
+        None
+    }
+    fn syspath(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+}
+#[derive(Debug)]
+struct TestTablet {
+    device: u32,
+    tool: u64,
+    x: f64,
+    y: f64,
+    pressure: f64,
+    proximity: ProximityState,
+    time: u32,
+}
+impl Event<TestInput> for TestTablet {
+    fn time(&self) -> InputTime {
+        InputTime::from_millis(self.time)
+    }
+    fn device(&self) -> TestDevice {
+        TestDevice::Tablet(self.device)
+    }
+}
+impl AbsolutePositionEvent<TestInput> for TestTablet {
+    fn x(&self) -> f64 {
+        self.x
+    }
+    fn y(&self) -> f64 {
+        self.y
+    }
+    fn x_transformed(&self, width: i32) -> f64 {
+        self.x * f64::from(width)
+    }
+    fn y_transformed(&self, height: i32) -> f64 {
+        self.y * f64::from(height)
+    }
+}
+impl TabletToolEvent<TestInput> for TestTablet {
+    fn tool(&self) -> TabletToolDescriptor {
+        TabletToolDescriptor {
+            tool_type: TabletToolType::Pen,
+            hardware_serial: self.tool,
+            hardware_id_wacom: 0,
+            capabilities: TabletToolCapabilities::PRESSURE,
+        }
+    }
+    fn delta_x(&self) -> f64 {
+        0.0
+    }
+    fn delta_y(&self) -> f64 {
+        0.0
+    }
+    fn distance(&self) -> f64 {
+        0.0
+    }
+    fn distance_has_changed(&self) -> bool {
+        false
+    }
+    fn pressure(&self) -> f64 {
+        self.pressure
+    }
+    fn pressure_has_changed(&self) -> bool {
+        true
+    }
+    fn slider_position(&self) -> f64 {
+        0.0
+    }
+    fn slider_has_changed(&self) -> bool {
+        false
+    }
+    fn tilt_x(&self) -> f64 {
+        0.0
+    }
+    fn tilt_x_has_changed(&self) -> bool {
+        false
+    }
+    fn tilt_y(&self) -> f64 {
+        0.0
+    }
+    fn tilt_y_has_changed(&self) -> bool {
+        false
+    }
+    fn rotation(&self) -> f64 {
+        0.0
+    }
+    fn rotation_has_changed(&self) -> bool {
+        false
+    }
+    fn wheel_delta(&self) -> f64 {
+        0.0
+    }
+    fn wheel_delta_discrete(&self) -> i32 {
+        0
+    }
+    fn wheel_has_changed(&self) -> bool {
+        false
+    }
+}
+impl TabletToolAxisEvent<TestInput> for TestTablet {}
+impl TabletToolProximityEvent<TestInput> for TestTablet {
+    fn state(&self) -> ProximityState {
+        self.proximity
+    }
 }

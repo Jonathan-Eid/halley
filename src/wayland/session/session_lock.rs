@@ -505,6 +505,7 @@ pub fn leave_secure_mode<D: SessionDriver>(session: &mut Session<D>) {
 }
 
 fn cancel_client_input<D: SessionDriver>(session: &mut Session<D>) {
+    crate::session::tablet::cancel_all(session);
     crate::session::touch::cancel_all(session);
     crate::session::gesture::cancel_all(session);
     if let Some(pointer) = session.seat.get_pointer() {

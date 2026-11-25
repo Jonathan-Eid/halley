@@ -473,7 +473,7 @@ pub(super) fn cancel_surface<D: SessionDriver>(session: &mut Session<D>, surface
     }
 }
 
-fn route<D: SessionDriver>(
+pub(super) fn route<D: SessionDriver>(
     session: &Session<D>,
     screen: Point<f64, Logical>,
 ) -> Option<crate::input::pointer::PointerRoute> {
@@ -496,7 +496,7 @@ fn route<D: SessionDriver>(
     )
 }
 
-fn screen_position<B, E>(
+pub(super) fn screen_position<B, E>(
     input: &halley_config::Input,
     wayland: &crate::wayland::WaylandState,
     primary_output: &Output,
@@ -525,7 +525,7 @@ where
     transform_absolute_position(event, output, wayland.space.output_geometry(output)?)
 }
 
-fn transform_absolute_position<B, E>(
+pub(super) fn transform_absolute_position<B, E>(
     event: &E,
     output: &Output,
     geometry: smithay::utils::Rectangle<i32, Logical>,

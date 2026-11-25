@@ -1,0 +1,130 @@
+use smithay::backend::input::{
+    Device, DeviceCapability, Event, InputBackend, InputEvent, ProximityState,
+    TabletToolButtonEvent, TabletToolEvent, TabletToolProximityEvent, TabletToolTipEvent,
+    TabletToolTipState,
+};
+use smithay::input::tablet::{TabletDescriptor, TabletSeatTrait, tool};
+use smithay::utils::SERIAL_COUNTER;
+
+use super::{Session, SessionDriver};
+
+pub(super) fn device_event<D: SessionDriver, B: InputBackend>(session: &mut Session<D>, event: &InputEvent<B>) -> bool {
+    match event {
+        InputEvent::DeviceAdded { device } if device.has_capability(DeviceCapability::TabletTool) => {
+            let seat = session.seat.tablet_seat();
+            let desc = TabletDescriptor::from(device);
+            if seat.get_tablet(&desc).is_none() {
+                seat.add_wp_tablet(&session.wayland.display_handle, &desc);
+            }
+        }
+        InputEvent::DeviceRemoved { device } if device.has_capability(DeviceCapability::TabletTool) => {
+            let tools = session.tablet_proximity.cancel_device(&device.id());
+            cancel_tools(session, tools);
+            let seat = session.seat.tablet_seat();
+            seat.remove_tablet(&TabletDescriptor::from(device));
+            if seat.count_tablets() == 0 { seat.clear_tools(); }
+        }
+        _ => {}
+    }
+    false
+}
+
+pub(crate) fn cancel_all<D: SessionDriver>(session: &mut Session<D>) {
+    let tools = session.tablet_proximity.cancel_all();
+    cancel_tools(session, tools);
+}
+
+fn cancel_tools<D: SessionDriver>(session: &mut Session<D>, tools: Vec<smithay::backend::input::TabletToolDescriptor>) {
+    let seat = session.seat.tablet_seat();
+    let time = smithay::backend::input::InputTime::from_millis(session.start_time.elapsed().as_millis() as u32);
+    for desc in tools {
+        if let Some(tool) = seat.get_tool(&desc) {
+            tool.proximity_out(session, &tool::ProximityOutEvent { serial: SERIAL_COUNTER.next_serial(), time });
+            tool.frame(session, time);
+        }
+    }
+}
+
+fn tablet_position<D, B, E>(session: &Session<D>, event: &E) -> Option<smithay::utils::Point<f64, smithay::utils::Logical>>
+where
+    D: SessionDriver,
+    B: InputBackend,
+    E: smithay::backend::input::AbsolutePositionEvent<B>,
+{
+    let output = session.driver.primary_output();
+    super::touch::transform_absolute_position(event, output, session.wayland.space.output_geometry(output)?)
+}
+
+fn axis<B: InputBackend, E: TabletToolEvent<B>>(event: &E) -> tool::AxisFrame {
+    tool::AxisFrame {
+        pressure: event.pressure_has_changed().then(|| event.pressure()),
+        distance: event.distance_has_changed().then(|| event.distance()),
+        tilt: event.tilt_has_changed().then(|| event.tilt()),
+        rotation: event.rotation_has_changed().then(|| event.rotation()),
+        slider: event.slider_has_changed().then(|| event.slider_position()),
+        wheel: event.wheel_has_changed().then(|| (event.wheel_delta(), event.wheel_delta_discrete())),
+    }
+}
+
+pub(super) fn handle<D: SessionDriver, B: InputBackend>(session: &mut Session<D>, event: &InputEvent<B>) -> bool {
+    let seat = session.seat.tablet_seat();
+    match event {
+        InputEvent::TabletToolProximity { event } => {
+            let descriptor = event.tool();
+            match event.state() {
+                ProximityState::Out => {
+                    if session.tablet_proximity.leave(&descriptor) {
+                        if let Some(tool) = seat.get_tool(&descriptor) {
+                            tool.proximity_out(session, &tool::ProximityOutEvent { serial: SERIAL_COUNTER.next_serial(), time: event.time() });
+                            tool.frame(session, event.time());
+                        }
+                    }
+                }
+                ProximityState::In => {
+                    let Some(position) = tablet_position::<D, B, _>(session, event) else { return true; };
+                    let Some(tablet) = seat.get_tablet(&TabletDescriptor::from(&event.device())) else { return true; };
+                    let Some(route) = super::touch::route(session, position) else { return true; };
+                    let tool = seat.get_tool(&descriptor).unwrap_or_else(|| {
+                        let display = session.wayland.display_handle.clone();
+                        seat.add_wp_tool(session, &display, &descriptor)
+                    });
+                    tool.proximity_in(session, route.focus, tablet, &tool::ProximityInEvent { location: route.location, axis: Some(axis::<B, _>(event)), serial: SERIAL_COUNTER.next_serial(), time: event.time() });
+                    session.tablet_proximity.enter(descriptor, event.device().id());
+                    tool.frame(session, event.time());
+                }
+            }
+        }
+        InputEvent::TabletToolAxis { event } => {
+            let descriptor = event.tool();
+            if !session.tablet_proximity.contains(&descriptor) { return true; }
+            let Some(tool) = seat.get_tool(&descriptor) else { return true; };
+            let Some(position) = tablet_position::<D, B, _>(session, event) else { return true; };
+            let Some(route) = super::touch::route(session, position) else { return true; };
+            tool.axis(session, axis::<B, _>(event));
+            tool.motion(session, route.focus, &tool::MotionEvent { location: route.location, serial: SERIAL_COUNTER.next_serial(), time: event.time() });
+            tool.frame(session, event.time());
+        }
+        InputEvent::TabletToolTip { event } => {
+            let descriptor = event.tool();
+            if !session.tablet_proximity.contains(&descriptor) { return true; }
+            if let Some(tool) = seat.get_tool(&descriptor) {
+                let serial = SERIAL_COUNTER.next_serial();
+                match event.tip_state() {
+                    TabletToolTipState::Down => tool.down(session, &tool::DownEvent { serial, time: event.time() }),
+                    TabletToolTipState::Up => tool.up(session, &tool::UpEvent { serial, time: event.time() }),
+                }
+                tool.frame(session, event.time());
+            }
+        }
+        InputEvent::TabletToolButton { event } => {
+            let descriptor = event.tool();
+            if !session.tablet_proximity.contains(&descriptor) { return true; }
+            if let Some(tool) = seat.get_tool(&descriptor) {
+                tool.button(session, &tool::ButtonEvent { serial: SERIAL_COUNTER.next_serial(), button: event.button(), state: event.button_state(), time: event.time() });
+                tool.frame(session, event.time());
+            }
+        }
+        _ => return false,
+    }
+    true
+}

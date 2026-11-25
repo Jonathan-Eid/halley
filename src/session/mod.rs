@@ -102,6 +102,10 @@ mod spawn;
 mod startup_clusters;
 #[path = "display/timing.rs"]
 mod timing;
+#[path = "input/tablet.rs"]
+pub(crate) mod tablet;
+#[path = "input/tablet_lifecycle.rs"]
+mod tablet_lifecycle;
 #[path = "input/touch.rs"]
 pub(crate) mod touch;
 #[cfg(feature = "xwayland")]

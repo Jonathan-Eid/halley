@@ -78,6 +78,8 @@ mod output_origin;
 mod pointer_warp;
 #[path = "support/resize_drag.rs"]
 mod resize_drag;
+#[path = "support/tablet_nested.rs"]
+mod tablet_nested;
 #[path = "support/steam_close.rs"]
 mod steam_close;
 #[path = "support/surface_dismissal.rs"]
@@ -360,6 +362,7 @@ use wayland_protocols::xdg::foreign::zv2::client::{
 
 #[derive(Default)]
 struct NativeState {
+    tablet: tablet_nested::Observations,
     outside_presses: usize,
     hold_layer_buffer: bool,
     pointer_buttons: Vec<(
