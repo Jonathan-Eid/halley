@@ -384,6 +384,7 @@ pub(crate) fn dispatch<D: SessionDriver>(
                             crate::shell::cluster_composer::ComposerStyle::default(),
                             now,
                         ) {
+                            super::super::tablet::cancel_all(session);
                             session.cursor.set_override(
                                 crate::cursor::OverrideSource::Modal,
                                 Some(smithay::input::pointer::CursorIcon::Default),

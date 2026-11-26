@@ -758,7 +758,13 @@ pub fn run(explicit_config_path: Option<std::path::PathBuf>) {
                 smithay::backend::input::InputEvent::Keyboard { .. }
                     | smithay::backend::input::InputEvent::PointerButton { .. }
                     | smithay::backend::input::InputEvent::PointerAxis { .. }
+                    | smithay::backend::input::InputEvent::TabletToolProximity { .. }
+                    | smithay::backend::input::InputEvent::TabletToolAxis { .. }
+                    | smithay::backend::input::InputEvent::TabletToolTip { .. }
+                    | smithay::backend::input::InputEvent::TabletToolButton { .. }
             ) {
+                // A tablet can be mapped to any output. Until a target is
+                // known, None deliberately wakes all outputs.
                 app.driver.wake_dpms_on_input(wake_before.as_ref());
                 app.sync_output_power();
             }

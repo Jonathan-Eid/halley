@@ -44,6 +44,23 @@ mod tests {
         assert!(state.cancel_all().is_empty());
     }
     #[test]
+    fn tablet_input_wakes_powered_off_outputs() {
+        let source = include_str!("../drivers/tty/mod.rs");
+        let wake = source.split("let wake_before = match &event").nth(1).unwrap().split("match &event {").next().unwrap();
+        for variant in ["TabletToolProximity", "TabletToolAxis", "TabletToolTip", "TabletToolButton"] {
+            assert!(wake.contains(variant), "{variant} must trigger DPMS wake");
+        }
+    }
+
+    #[test]
+    fn cluster_composer_installs_tablet_isolation() {
+        let actions = include_str!("actions.rs");
+        let cluster = actions.split("SessionControl::ClusterMode =>").nth(1).unwrap().split("SessionControl::").next().unwrap();
+        assert!(cluster.contains("tablet::cancel_all(session)"), "composer entry must cancel active strokes");
+        assert!(include_str!("tablet.rs").contains("session.shell.cluster_composer.is_active()"), "composer must suppress tablet input");
+    }
+
+    #[test]
     fn capture_and_confirmation_install_tablet_isolation() {
         let capture = include_str!("../../capture/mod.rs");
         let state = include_str!("../state.rs");

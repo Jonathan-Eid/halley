@@ -107,7 +107,9 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
     session: &mut Session<D>,
     event: &InputEvent<B>,
 ) -> bool {
-    if (session.capture.is_active() || session.shell.overlays.confirmation_modal_active())
+    if (session.capture.is_active()
+        || session.shell.overlays.confirmation_modal_active()
+        || session.shell.cluster_composer.is_active())
         && matches!(
             event,
             InputEvent::TabletToolProximity { .. }
