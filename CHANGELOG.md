@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
-- Add initial tablet-v2 tool routing, including pressure, output mapping, focus transitions, recovery when output geometry becomes available, and pointer fallback that respects pointer locks and confinement.
+- Add initial tablet-v2 tool routing, including pressure, output mapping, focus transitions, server-side titlebar interactions, recovery when output geometry becomes available, and pointer fallback that respects pointer locks and confinement.
   Tablet support remains experimental and is not ready for deployment.
 - Add core geometry for projecting one Field onto independent output cameras
   and checking visibility across them. The compositor still presents each

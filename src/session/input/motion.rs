@@ -7,7 +7,6 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
     position_before: (f64, f64),
     proposed_position: (f64, f64),
 ) -> Option<(f64, f64)> {
-    let pointer_handle = session.pointer_handle();
     let motion = match event {
         InputEvent::PointerMotion { event } => Some((
             event.delta(),
@@ -24,6 +23,37 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
         }
         _ => None,
     };
+    handle_motion(session, position_before, motion)
+}
+
+pub(in crate::session) fn handle_tablet_grab<D: SessionDriver>(
+    session: &mut Session<D>,
+    position_before: (f64, f64),
+    time: smithay::backend::input::InputTime,
+) {
+    let position = session.pointer.position();
+    let delta = Point::<f64, Logical>::from((
+        position.0 - position_before.0,
+        position.1 - position_before.1,
+    ));
+    let _ = handle_motion(
+        session,
+        position_before,
+        Some((delta, delta, time, time.millis())),
+    );
+}
+
+fn handle_motion<D: SessionDriver>(
+    session: &mut Session<D>,
+    position_before: (f64, f64),
+    motion: Option<(
+        Point<f64, Logical>,
+        Point<f64, Logical>,
+        smithay::backend::input::InputTime,
+        u32,
+    )>,
+) -> Option<(f64, f64)> {
+    let pointer_handle = session.pointer_handle();
     let constrained_motion = super::super::pointer::constrain_motion(session, &pointer_handle);
 
     if let super::super::pointer::ConstrainedMotion::RelativeOnly { surface, origin } =

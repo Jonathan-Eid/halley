@@ -108,6 +108,32 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
     finish(session);
 }
 
+// Route a pen stroke owned by a server decoration through the same titlebar
+// and grab lifecycle as a mouse, without forwarding a duplicate client click.
+pub(in crate::session) fn tablet_decoration<D: SessionDriver>(
+    session: &mut Session<D>,
+    state: ButtonState,
+    time: u32,
+    route: &Option<crate::input::pointer::PointerRoute>,
+) -> bool {
+    let click = Click {
+        button: BTN_LEFT,
+        state,
+        time,
+        serial: SERIAL_COUNTER.next_serial(),
+        position_after: session.pointer.position(),
+    };
+    if state == ButtonState::Pressed {
+        return decoration_pointer_grab(session, click, route)
+            || titlebar_click(session, click, route);
+    }
+    if titlebar_click(session, click, route) {
+        return true;
+    }
+    let (consumed, _) = field_left_button(session, click, false, route);
+    release_ends_grab(session, click, consumed)
+}
+
 /// A compositor-driven popup move owns every button until its own button
 /// is released.
 fn finish_popup_move<D: SessionDriver>(session: &mut Session<D>, click: Click) -> bool {

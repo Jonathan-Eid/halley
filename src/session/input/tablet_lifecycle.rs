@@ -5,6 +5,7 @@ pub(super) struct ProximityState<T, D = ()> {
     active: HashMap<T, D>,
     pointer_buttons: HashMap<T, std::collections::HashSet<u32>>,
     cursor: Option<T>,
+    decoration: Option<T>,
 }
 impl<T, D> Default for ProximityState<T, D> {
     fn default() -> Self {
@@ -12,10 +13,28 @@ impl<T, D> Default for ProximityState<T, D> {
             active: HashMap::new(),
             pointer_buttons: HashMap::new(),
             cursor: None,
+            decoration: None,
         }
     }
 }
 impl<T: Eq + Hash, D> ProximityState<T, D> {
+    pub fn has_decoration(&self) -> bool {
+        self.decoration.is_some()
+    }
+    pub fn decoration_held(&self, tool: &T) -> bool {
+        self.decoration.as_ref() == Some(tool)
+    }
+    pub fn begin_decoration(&mut self, tool: T) {
+        self.decoration = Some(tool);
+    }
+    pub fn end_decoration(&mut self, tool: &T) -> bool {
+        if self.decoration_held(tool) {
+            self.decoration = None;
+            true
+        } else {
+            false
+        }
+    }
     pub fn pointer_held(&self, tool: &T) -> bool {
         self.pointer_buttons
             .get(tool)

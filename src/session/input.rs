@@ -22,7 +22,7 @@ use crate::wayland;
 
 pub(crate) mod actions;
 mod axis;
-mod button;
+pub(super) mod button;
 mod cluster_interaction;
 mod dispatch;
 pub(crate) use cluster_interaction::*;
@@ -30,7 +30,7 @@ mod hit_test;
 use hit_test::*;
 mod keyboard;
 mod modal;
-mod motion;
+pub(super) mod motion;
 pub(crate) mod repeat;
 
 use crate::input::buttons::BTN_LEFT;

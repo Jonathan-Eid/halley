@@ -62,6 +62,7 @@ fn cancel_tools<D: SessionDriver>(
         session.start_time.elapsed().as_millis() as u32,
     );
     for desc in tools {
+        cancel_decoration(session, &desc);
         release_pointer_buttons(session, &desc, time);
         if let Some(tool) = seat.get_tool(&desc) {
             tool.proximity_out(
@@ -73,6 +74,22 @@ fn cancel_tools<D: SessionDriver>(
             );
             tool.frame(session, time);
         }
+    }
+}
+
+fn cancel_decoration<D: SessionDriver>(
+    session: &mut Session<D>,
+    desc: &smithay::backend::input::TabletToolDescriptor,
+) {
+    if session.tablet_proximity.end_decoration(desc) {
+        if let Some(pressed) = session.interactions.titlebar_pressed.take()
+            && pressed.control == crate::titlebar::Control::Close
+        {
+            super::closing::discard_close_control(session, &pressed.window);
+        }
+        crate::input::grab::release_resize_anchor(&mut session.interactions.resize_anchor);
+        session.end_grab();
+        session.request_redraw();
     }
 }
 
@@ -307,6 +324,7 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
                 ProximityState::Out => {
                     let owned_cursor = session.tablet_proximity.owns_cursor(&descriptor);
                     if session.tablet_proximity.leave(&descriptor) {
+                        cancel_decoration(session, &descriptor);
                         release_pointer_buttons(session, &descriptor, event.time());
                         if owned_cursor {
                             super::pointer::reset_client_cursor_image(session);
@@ -379,6 +397,14 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
                 return true;
             };
             let position = tablet_position::<D, B, _>(session, event);
+            if session.tablet_proximity.decoration_held(&descriptor) {
+                if let Some(position) = position {
+                    let before = session.pointer.position();
+                    update_cursor(session, &descriptor, Some(position), None);
+                    super::input::motion::handle_tablet_grab(session, before, event.time());
+                }
+                return true;
+            }
             let route = position.and_then(|position| super::touch::route(session, position));
             pointer_motion(
                 session,
@@ -411,8 +437,50 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
                 return true;
             }
             if let Some(tool) = seat.get_tool(&descriptor) {
-                if let Some(position) = tablet_position::<D, B, _>(session, event) {
+                let position = tablet_position::<D, B, _>(session, event);
+                if session.tablet_proximity.decoration_held(&descriptor) {
+                    if let Some(position) = position {
+                        let before = session.pointer.position();
+                        update_cursor(session, &descriptor, Some(position), None);
+                        super::input::motion::handle_tablet_grab(session, before, event.time());
+                    }
+                    if matches!(event.tip_state(), TabletToolTipState::Up) {
+                        let route =
+                            position.and_then(|position| super::touch::route(session, position));
+                        super::input::button::tablet_decoration(
+                            session,
+                            ButtonState::Released,
+                            event.time().millis(),
+                            &route,
+                        );
+                        session.tablet_proximity.end_decoration(&descriptor);
+                    }
+                    return true;
+                }
+                if let Some(position) = position {
                     let route = super::touch::route(session, position);
+                    if matches!(event.tip_state(), TabletToolTipState::Down)
+                        && !super::pointer::has_active_constraint(session)
+                        && !tool.is_grabbed()
+                        && !session.pointer_handle().is_grabbed()
+                        && !session.interactions.has_grab()
+                        && !session.tablet_proximity.has_decoration()
+                        && matches!(
+                            route.as_ref().map(|r| &r.target),
+                            Some(crate::input::pointer::PointerTarget::Decoration { .. })
+                        )
+                    {
+                        update_cursor(session, &descriptor, Some(position), None);
+                        if super::input::button::tablet_decoration(
+                            session,
+                            ButtonState::Pressed,
+                            event.time().millis(),
+                            &route,
+                        ) {
+                            session.tablet_proximity.begin_decoration(descriptor);
+                            return true;
+                        }
+                    }
                     if matches!(event.tip_state(), TabletToolTipState::Down)
                         && !super::pointer::has_active_constraint(session)
                         && (!session.pointer_handle().is_grabbed()

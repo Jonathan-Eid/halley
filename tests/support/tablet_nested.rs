@@ -809,3 +809,82 @@ fn pointer_confinement_clamps_tablet_fallback_motion() {
         "confined position must remain within the surface: {x}, {y}"
     );
 }
+
+#[test]
+#[ignore = "requires Wayland, XWayland and HALLEY_TEST_WINIT_SERVER"]
+fn tablet_titlebar_drag_moves_window() {
+    let mut fixture = Fixture::with_two_outputs(
+        "animations:\n enabled false\nend\ndecorations:\n titlebars:\n  enabled true\n  height 32\n end\nend\n",
+    );
+    let input = fullscreen_multi_output::Input::new(&fixture);
+    let (mut queue, mut client) = native_window_named(
+        &fixture,
+        "Pen drag",
+        "halley.test.pen-drag",
+        [0, u32::MAX, 0, u32::MAX],
+    );
+    let manager: zxdg_decoration_manager_v1::ZxdgDecorationManagerV1 =
+        client.registry.as_ref().unwrap().bind(
+            client.globals["zxdg_decoration_manager_v1"],
+            1,
+            &queue.handle(),
+            (),
+        );
+    let decoration =
+        manager.get_toplevel_decoration(client.toplevel.as_ref().unwrap(), &queue.handle(), ());
+    decoration.set_mode(zxdg_toplevel_decoration_v1::Mode::ServerSide);
+    queue.roundtrip(&mut client).unwrap();
+    queue.roundtrip(&mut client).unwrap();
+    let node = fixture.node("Pen drag");
+    fullscreen_multi_output::place(&mut fixture, node.id, false);
+    let state = input.state();
+    let window = state["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == node.id)
+        .unwrap();
+    let r = window["rect"].as_array().unwrap();
+    let client = window["client_geometry"].as_array().unwrap();
+    let output = state["primary_geometry"].as_array().unwrap();
+    let x = r[0].as_f64().unwrap() + r[2].as_f64().unwrap() / 2.0;
+    let scale = r[3].as_f64().unwrap() / client[3].as_f64().unwrap();
+    let y = r[1].as_f64().unwrap() - 16.0 * scale;
+    let nx = |x: f64| (x - output[0].as_f64().unwrap()) / output[2].as_f64().unwrap();
+    // Winit exposes its primary output with a vertically flipped transform.
+    let ny = |y: f64| 1.0 - (y - output[1].as_f64().unwrap()) / output[3].as_f64().unwrap();
+    input.command("tablet-add 1");
+    input.command(&format!("tablet-proximity 1 42 {} {} 0.0 in", nx(x), ny(y)));
+    input.command(&format!("tablet-tip 1 42 {} {} 0.8 down", nx(x), ny(y)));
+    input.command(&format!(
+        "tablet-axis 1 42 {} {} 0.8 in",
+        nx(x + 60.0),
+        ny(y + 30.0)
+    ));
+    assert_eq!(
+        input.state()["moving"],
+        true,
+        "pen drag must start compositor move"
+    );
+    let moved = input.state()["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == node.id)
+        .unwrap()["client_geometry"]
+        .clone();
+    assert_ne!(
+        moved, window["client_geometry"],
+        "pen motion must move the window"
+    );
+    input.command(&format!(
+        "tablet-tip 1 42 {} {} 0.0 up",
+        nx(x + 60.0),
+        ny(y + 30.0)
+    ));
+    assert_eq!(
+        input.state()["moving"],
+        false,
+        "pen release must finish move"
+    );
+}
