@@ -219,6 +219,12 @@ fn isolation_scenario(lock: bool) {
         vec![client.surface.clone().unwrap()]
     );
 
+    // Enter the modal while the pen is touching the surface, so cancellation
+    // also exercises an active tip rather than hover alone.
+    input.command(&format!("tablet-tip 1 42 {nx} {ny} 0.75 down"));
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(client.tablet.events.last(), Some(&"down"));
+
     let mut request = None;
     if lock {
         use wayland_protocols::ext::session_lock::v1::client::ext_session_lock_manager_v1;
@@ -229,6 +235,8 @@ fn isolation_scenario(lock: bool) {
                 &handle,
                 (),
             );
+        // This checks isolation during lock acquisition, not a confirmed lock
+        // or unlock: the two-output fixture does not confirm this request.
         let _lock = manager.lock(&handle, ());
         queue.roundtrip(&mut client).unwrap();
     } else {
@@ -263,8 +271,11 @@ fn isolation_scenario(lock: bool) {
         client.tablet.pressures.len(),
         client.tablet.frames,
     );
+    let event_count = client.tablet.events.len();
     input.command(&format!("tablet-proximity 1 42 {nx} {ny} 0.7 in"));
     input.command(&format!("tablet-axis 1 42 {nx} {ny} 0.8 in"));
+    input.command(&format!("tablet-tip 1 42 {nx} {ny} 0.8 down"));
+    input.command(&format!("tablet-tip 1 42 {nx} {ny} 0.0 up"));
     queue.roundtrip(&mut client).unwrap();
     assert_eq!(
         (
@@ -274,6 +285,11 @@ fn isolation_scenario(lock: bool) {
         ),
         before,
         "modal input leaked to ordinary client"
+    );
+    assert_eq!(
+        client.tablet.events.len(),
+        event_count,
+        "modal tip leaked to ordinary client"
     );
     if let Some(request) = request {
         input.key(1, true);
