@@ -1,9 +1,10 @@
 use smithay::backend::input::{
-    Device, DeviceCapability, Event, InputBackend, InputEvent, ProximityState,
+    ButtonState, Device, DeviceCapability, Event, InputBackend, InputEvent, ProximityState,
     TabletToolButtonEvent, TabletToolEvent, TabletToolProximityEvent, TabletToolTipEvent,
     TabletToolTipState,
 };
 use smithay::input::tablet::{TabletDescriptor, TabletSeatTrait, tool};
+use smithay::reexports::wayland_server::Resource;
 use smithay::utils::SERIAL_COUNTER;
 
 use super::{Session, SessionDriver};
@@ -52,6 +53,7 @@ fn cancel_tools<D: SessionDriver>(
         session.start_time.elapsed().as_millis() as u32,
     );
     for desc in tools {
+        release_pointer_buttons(session, &desc, time);
         if let Some(tool) = seat.get_tool(&desc) {
             tool.proximity_out(
                 session,
@@ -62,6 +64,96 @@ fn cancel_tools<D: SessionDriver>(
             );
             tool.frame(session, time);
         }
+    }
+}
+
+// A pen stroke chooses its protocol at press time. Smithay's pointer click grab
+// retains the original focus until release, even when the pen leaves the surface.
+fn pointer_motion<D: SessionDriver>(
+    session: &mut Session<D>,
+    tool: &smithay::input::tablet::tool::TabletToolHandle<Session<D>>,
+    desc: &smithay::backend::input::TabletToolDescriptor,
+    route: Option<&crate::input::pointer::PointerRoute>,
+    time: smithay::backend::input::InputTime,
+) -> bool {
+    let held = session.tablet_proximity.pointer_held(desc);
+    // Do not inject a second device into another pointer or tablet grab.
+    if !held && (tool.is_grabbed() || session.pointer_handle().is_grabbed()) {
+        return false;
+    }
+    let Some(route) = route else {
+        return held;
+    };
+    let Some((surface, _)) = route.focus.as_ref() else {
+        return held;
+    };
+    let Some(client) = surface.client() else {
+        return held;
+    };
+    if !held && tool.client_tools(&client).next().is_some() {
+        return false;
+    }
+    let pointer = session.pointer_handle();
+    pointer.motion(
+        session,
+        route.focus.clone(),
+        &smithay::input::pointer::MotionEvent {
+            location: route.location,
+            serial: SERIAL_COUNTER.next_serial(),
+            time,
+        },
+    );
+    pointer.frame(session);
+    true
+}
+
+fn pointer_button<D: SessionDriver>(
+    session: &mut Session<D>,
+    desc: &smithay::backend::input::TabletToolDescriptor,
+    button: u32,
+    state: ButtonState,
+    time: smithay::backend::input::InputTime,
+    eligible: bool,
+) {
+    let send = match state {
+        ButtonState::Pressed if eligible => {
+            session.tablet_proximity.pointer_press(desc.clone(), button)
+        }
+        ButtonState::Released => session.tablet_proximity.pointer_release(desc, button),
+        _ => false,
+    };
+    if send {
+        let pointer = session.pointer_handle();
+        pointer.button(
+            session,
+            &smithay::input::pointer::ButtonEvent {
+                serial: SERIAL_COUNTER.next_serial(),
+                time,
+                button,
+                state,
+            },
+        );
+        pointer.frame(session);
+    }
+}
+
+fn release_pointer_buttons<D: SessionDriver>(
+    session: &mut Session<D>,
+    desc: &smithay::backend::input::TabletToolDescriptor,
+    time: smithay::backend::input::InputTime,
+) {
+    for button in session.tablet_proximity.take_pointer_buttons(desc) {
+        let pointer = session.pointer_handle();
+        pointer.button(
+            session,
+            &smithay::input::pointer::ButtonEvent {
+                serial: SERIAL_COUNTER.next_serial(),
+                time,
+                button,
+                state: ButtonState::Released,
+            },
+        );
+        pointer.frame(session);
     }
 }
 
@@ -127,6 +219,7 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
             match event.state() {
                 ProximityState::Out => {
                     if session.tablet_proximity.leave(&descriptor) {
+                        release_pointer_buttons(session, &descriptor, event.time());
                         if let Some(tool) = seat.get_tool(&descriptor) {
                             tool.proximity_out(
                                 session,
@@ -151,6 +244,7 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
                         let display = session.wayland.display_handle.clone();
                         seat.add_wp_tool(session, &display, &descriptor)
                     });
+                    pointer_motion(session, &tool, &descriptor, route.as_ref(), event.time());
                     // Keep the physical tool in proximity without focusing a surface;
                     // a later positioned event can then establish focus.
                     let (focus, location) = route
@@ -185,6 +279,7 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
             };
             let position = tablet_position::<D, B, _>(session, event);
             let route = position.and_then(|position| super::touch::route(session, position));
+            pointer_motion(session, &tool, &descriptor, route.as_ref(), event.time());
             let (focus, location) = route.map_or((None, position.unwrap_or_default()), |route| {
                 (route.focus, route.location)
             });
@@ -229,6 +324,13 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
                             }
                         }
                     }
+                    let eligible =
+                        pointer_motion(session, &tool, &descriptor, route.as_ref(), event.time());
+                    let state = match event.tip_state() {
+                        TabletToolTipState::Down => ButtonState::Pressed,
+                        TabletToolTipState::Up => ButtonState::Released,
+                    };
+                    pointer_button(session, &descriptor, 272, state, event.time(), eligible);
                     let (focus, location) =
                         route.map_or((None, position), |route| (route.focus, route.location));
                     tool.motion(
@@ -242,6 +344,16 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
                     );
                     tool.axis(session, axis::<B, _>(event));
                 } else {
+                    if matches!(event.tip_state(), TabletToolTipState::Up) {
+                        pointer_button(
+                            session,
+                            &descriptor,
+                            272,
+                            ButtonState::Released,
+                            event.time(),
+                            false,
+                        );
+                    }
                     tool.motion(
                         session,
                         None,

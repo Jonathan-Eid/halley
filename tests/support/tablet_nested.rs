@@ -102,6 +102,7 @@ fn tablet_pressure_and_surface_focus_are_delivered() {
     let manager: manager::ZwpTabletManagerV2 =
         registry.bind(client.globals["zwp_tablet_manager_v2"], 1, &handle, ());
     let _seat = manager.get_tablet_seat(&wl_seat, &handle, ());
+    let _pointer = wl_seat.get_pointer(&handle, ());
     queue.roundtrip(&mut client).unwrap();
     input.command("tablet-add 1");
     queue.roundtrip(&mut client).unwrap();
@@ -164,6 +165,10 @@ fn tablet_pressure_and_surface_focus_are_delivered() {
     queue.roundtrip(&mut client).unwrap();
     assert_eq!(&client.tablet.events[..2], &["motion", "pressure"]);
     assert!(client.tablet.events[2..].contains(&"up"));
+    assert!(
+        client.pointer_buttons.is_empty(),
+        "tablet-aware client must not receive duplicate pointer clicks"
+    );
 
     // A coordinate on the exclusive output boundary has no route. Pressure
     // must not be sent to the previously focused client in that case.
@@ -441,7 +446,8 @@ fn pointer_only_client_receives_pen_tip() {
     input.command("tablet-add 1");
     input.command(&format!("tablet-proximity 1 42 {nx} {ny} 0.0 in"));
     input.command(&format!("tablet-tip 1 42 {nx} {ny} 0.8 down"));
-    input.command(&format!("tablet-tip 1 42 {nx} {ny} 0.0 up"));
+    input.command("tablet-axis 1 42 1.0 1.0 0.8 in");
+    input.command("tablet-tip 1 42 1.0 1.0 0.0 up");
     queue.roundtrip(&mut client).unwrap();
     assert_eq!(
         client.pointer_buttons,
@@ -460,4 +466,48 @@ fn pointer_only_client_receives_pen_tip() {
             )
         ]
     );
+    // Entering capture cancels a held emulated button and suppresses later tip input.
+    client.pointer_buttons.clear();
+    input.command(&format!("tablet-axis 1 42 {nx} {ny} 0.0 in"));
+    input.command(&format!("tablet-tip 1 42 {nx} {ny} 0.8 down"));
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(client.pointer_buttons.len(), 1);
+    let path = fixture.path.join("halley/halley.sock");
+    let request = thread::spawn(move || {
+        halley_ipc::Connection::connect_to(&path)
+            .unwrap()
+            .request(
+                &Request::ChooseSource(halley_ipc::SourceChooserRequest {
+                    request_handle: "tablet-fallback-isolation".into(),
+                    source_types: halley_ipc::SOURCE_MONITOR,
+                }),
+                &[],
+            )
+            .unwrap()
+            .response
+    });
+    wait_for("capture active", || {
+        input.state()["capture_active"]
+            .as_bool()
+            .unwrap()
+            .then_some(())
+    });
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(
+        client.pointer_buttons.len(),
+        2,
+        "capture must release held fallback button"
+    );
+    input.command(&format!("tablet-proximity 1 42 {nx} {ny} 0.0 in"));
+    input.command(&format!("tablet-tip 1 42 {nx} {ny} 0.8 down"));
+    input.command(&format!("tablet-tip 1 42 {nx} {ny} 0.0 up"));
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(
+        client.pointer_buttons.len(),
+        2,
+        "capture must suppress fallback input"
+    );
+    input.key(1, true);
+    input.key(1, false);
+    request.join().unwrap();
 }
