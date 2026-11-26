@@ -9,6 +9,8 @@ use wayland_protocols::wp::tablet::zv2::client::{
 pub(super) struct Observations {
     tablets: usize,
     tools: usize,
+    tool: Option<tool::ZwpTabletToolV2>,
+    serial: Option<u32>,
     proximity: Vec<wl_surface::WlSurface>,
     pressures: Vec<u32>,
     motions: Vec<(f64, f64)>,
@@ -32,7 +34,10 @@ impl Dispatch<seat::ZwpTabletSeatV2, ()> for NativeState {
     ) {
         match event {
             seat::Event::TabletAdded { .. } => state.tablet.tablets += 1,
-            seat::Event::ToolAdded { .. } => state.tablet.tools += 1,
+            seat::Event::ToolAdded { id } => {
+                state.tablet.tools += 1;
+                state.tablet.tool = Some(id);
+            }
             _ => {}
         }
     }
@@ -48,7 +53,12 @@ impl Dispatch<tool::ZwpTabletToolV2, ()> for NativeState {
         _: &QueueHandle<Self>,
     ) {
         match event {
-            tool::Event::ProximityIn { surface, .. } => state.tablet.proximity.push(surface),
+            tool::Event::ProximityIn {
+                surface, serial, ..
+            } => {
+                state.tablet.proximity.push(surface);
+                state.tablet.serial = Some(serial);
+            }
             tool::Event::ProximityOut => state.tablet.proximity_outs += 1,
             tool::Event::Pressure { pressure } => {
                 state.tablet.pressures.push(pressure);
@@ -97,7 +107,7 @@ fn tablet_pressure_and_surface_focus_are_delivered() {
         "other window must have focus before pen down"
     );
     let handle = queue.handle();
-    let registry = client.registry.as_ref().unwrap();
+    let registry = client.registry.as_ref().unwrap().clone();
     let wl_seat: wl_seat::WlSeat = registry.bind(client.globals["wl_seat"], 1, &handle, ());
     let manager: manager::ZwpTabletManagerV2 =
         registry.bind(client.globals["zwp_tablet_manager_v2"], 1, &handle, ());
@@ -130,6 +140,28 @@ fn tablet_pressure_and_surface_focus_are_delivered() {
     input.command(&format!("tablet-axis 1 42 {nx} {ny} 0.5 in"));
     queue.roundtrip(&mut client).unwrap();
     assert_eq!(client.tablet.tools, 1);
+    let pointer = input.state()["pointer"].as_array().unwrap().clone();
+    assert!((pointer[0].as_f64().unwrap() - x).abs() < 2.0);
+    assert!((pointer[1].as_f64().unwrap() - y).abs() < 2.0);
+    let tool = client.tablet.tool.clone().unwrap();
+    let serial = client.tablet.serial.unwrap();
+    let compositor: wl_compositor::WlCompositor =
+        registry.bind(client.globals["wl_compositor"], 1, &handle, ());
+    let cursor = compositor.create_surface(&handle, ());
+    tool.set_cursor(serial.wrapping_add(1), Some(&cursor), 0, 0);
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(
+        input.state()["client_cursor_surface"],
+        false,
+        "invalid serial must not set cursor"
+    );
+    tool.set_cursor(serial, Some(&cursor), 0, 0);
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(
+        input.state()["client_cursor_surface"],
+        true,
+        "focused tablet client can set cursor"
+    );
     assert_eq!(
         client.tablet.proximity,
         vec![client.surface.clone().unwrap()]
@@ -175,6 +207,18 @@ fn tablet_pressure_and_surface_focus_are_delivered() {
     let pressure_count = client.tablet.pressures.len();
     input.command("tablet-axis 1 42 0.0 0.0 0.8 in");
     queue.roundtrip(&mut client).unwrap();
+    assert_eq!(
+        input.state()["client_cursor_surface"],
+        false,
+        "focus loss clears cursor"
+    );
+    tool.set_cursor(serial, Some(&cursor), 0, 0);
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(
+        input.state()["client_cursor_surface"],
+        false,
+        "unfocused client cannot restore cursor"
+    );
     assert_eq!(client.tablet.pressures.len(), pressure_count);
     assert_eq!(
         client.tablet.proximity_outs, 1,

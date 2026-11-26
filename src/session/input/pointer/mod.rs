@@ -469,7 +469,7 @@ fn route_and_update_client_focus<D: SessionDriver>(
     Some(route)
 }
 
-fn reset_client_cursor_image<D: SessionDriver>(session: &mut Session<D>) {
+pub(super) fn reset_client_cursor_image<D: SessionDriver>(session: &mut Session<D>) {
     if let Some(previous) = session.cursor.reset_image() {
         crate::cursor::surface::clear_outputs(&previous, &session.wayland.space);
     }

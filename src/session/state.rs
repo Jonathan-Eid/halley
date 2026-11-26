@@ -143,7 +143,12 @@ pub struct Session<D: SessionDriver> {
     pub capture: crate::capture::CaptureState,
     pub interactions: super::InteractionState,
     pub(super) touch: super::touch::TouchState,
-    pub(super) tablet_proximity: super::tablet_lifecycle::ProximityState<smithay::backend::input::TabletToolDescriptor, String>,
+    pub(super) tablet_cursor_focus:
+        Option<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
+    pub(super) tablet_proximity: super::tablet_lifecycle::ProximityState<
+        smithay::backend::input::TabletToolDescriptor,
+        String,
+    >,
     pub(super) gestures: super::gesture::GestureState,
     pub(super) window_trace: super::trace::WindowTrace,
     pub keyboard_monitor: Option<crate::accessibility::KeyboardMonitorService>,

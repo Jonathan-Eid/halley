@@ -26,7 +26,12 @@ pub(super) fn device_event<D: SessionDriver, B: InputBackend>(
         InputEvent::DeviceRemoved { device }
             if device.has_capability(DeviceCapability::TabletTool) =>
         {
+            let had_cursor = session.tablet_proximity.has_cursor();
             let tools = session.tablet_proximity.cancel_device(&device.id());
+            if had_cursor && !session.tablet_proximity.has_cursor() {
+                super::pointer::reset_client_cursor_image(session);
+                session.request_redraw();
+            }
             cancel_tools(session, tools);
             let seat = session.seat.tablet_seat();
             seat.remove_tablet(&TabletDescriptor::from(device));
@@ -40,6 +45,10 @@ pub(super) fn device_event<D: SessionDriver, B: InputBackend>(
 }
 
 pub(crate) fn cancel_all<D: SessionDriver>(session: &mut Session<D>) {
+    if session.tablet_proximity.has_cursor() {
+        super::pointer::reset_client_cursor_image(session);
+        session.request_redraw();
+    }
     let tools = session.tablet_proximity.cancel_all();
     cancel_tools(session, tools);
 }
@@ -182,6 +191,38 @@ where
     )
 }
 
+// Tablet position is a compositor cursor position, not synthetic wl_pointer input.
+fn update_cursor<D: SessionDriver>(
+    session: &mut Session<D>,
+    descriptor: &smithay::backend::input::TabletToolDescriptor,
+    position: Option<smithay::utils::Point<f64, smithay::utils::Logical>>,
+    focus: Option<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
+) {
+    let Some(position) = position else {
+        if session.tablet_proximity.owns_cursor(descriptor)
+            && session.tablet_cursor_focus.take().is_some()
+        {
+            super::pointer::reset_client_cursor_image(session);
+            session.request_redraw();
+        }
+        return;
+    };
+    let changed_owner = !session.tablet_proximity.owns_cursor(descriptor);
+    session.tablet_proximity.cursor_activity(descriptor);
+    if changed_owner || session.tablet_cursor_focus != focus {
+        super::pointer::reset_client_cursor_image(session);
+    }
+    session.tablet_cursor_focus = focus;
+    session.pointer.set_position(position.into());
+    session.cursor_policy.pointer_activity();
+    crate::cursor::surface::refresh_outputs(
+        &session.cursor,
+        &session.wayland.space,
+        session.pointer.position(),
+    );
+    session.request_redraw();
+}
+
 fn axis<B: InputBackend, E: TabletToolEvent<B>>(event: &E) -> tool::AxisFrame {
     tool::AxisFrame {
         pressure: event.pressure_has_changed().then(|| event.pressure()),
@@ -218,8 +259,13 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
             let descriptor = event.tool();
             match event.state() {
                 ProximityState::Out => {
+                    let owned_cursor = session.tablet_proximity.owns_cursor(&descriptor);
                     if session.tablet_proximity.leave(&descriptor) {
                         release_pointer_buttons(session, &descriptor, event.time());
+                        if owned_cursor {
+                            super::pointer::reset_client_cursor_image(session);
+                            session.request_redraw();
+                        }
                         if let Some(tool) = seat.get_tool(&descriptor) {
                             tool.proximity_out(
                                 session,
@@ -251,6 +297,7 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
                         .map_or((None, position.unwrap_or_default()), |route| {
                             (route.focus, route.location)
                         });
+                    let cursor_focus = focus.as_ref().map(|(surface, _)| surface.clone());
                     tool.proximity_in(
                         session,
                         focus,
@@ -264,7 +311,8 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
                     );
                     session
                         .tablet_proximity
-                        .enter(descriptor, event.device().id());
+                        .enter(descriptor.clone(), event.device().id());
+                    update_cursor(session, &descriptor, position, cursor_focus);
                     tool.frame(session, event.time());
                 }
             }
@@ -283,6 +331,7 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
             let (focus, location) = route.map_or((None, position.unwrap_or_default()), |route| {
                 (route.focus, route.location)
             });
+            let cursor_focus = focus.as_ref().map(|(surface, _)| surface.clone());
             tool.motion(
                 session,
                 focus,
@@ -292,6 +341,7 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
                     time: event.time(),
                 },
             );
+            update_cursor(session, &descriptor, position, cursor_focus);
             tool.axis(session, axis::<B, _>(event));
             tool.frame(session, event.time());
         }
@@ -333,6 +383,7 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
                     pointer_button(session, &descriptor, 272, state, event.time(), eligible);
                     let (focus, location) =
                         route.map_or((None, position), |route| (route.focus, route.location));
+                    let cursor_focus = focus.as_ref().map(|(surface, _)| surface.clone());
                     tool.motion(
                         session,
                         focus,
@@ -342,6 +393,7 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
                             time: event.time(),
                         },
                     );
+                    update_cursor(session, &descriptor, Some(position), cursor_focus);
                     tool.axis(session, axis::<B, _>(event));
                 } else {
                     if matches!(event.tip_state(), TabletToolTipState::Up) {
@@ -354,6 +406,7 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
                             false,
                         );
                     }
+                    update_cursor(session, &descriptor, None, None);
                     tool.motion(
                         session,
                         None,

@@ -1272,6 +1272,9 @@ impl<D: SessionDriver> SeatHandler for Session<D> {
         _seat: &Seat<Self>,
         image: smithay::input::pointer::CursorImageStatus,
     ) {
+        if self.tablet_proximity.has_cursor() {
+            return;
+        }
         if let Some(previous) = self.cursor.set_image(image) {
             crate::cursor::surface::clear_outputs(&previous, &self.wayland.space);
         }
@@ -1286,6 +1289,30 @@ impl<D: SessionDriver> SeatHandler for Session<D> {
 
 impl<D: SessionDriver> TabletSeatHandler for Session<D> {
     type ToolFocus = WlSurface;
+
+    fn tablet_tool_image(
+        &mut self,
+        tool: &smithay::backend::input::TabletToolDescriptor,
+        image: smithay::input::pointer::CursorImageStatus,
+    ) {
+        if !self.tablet_proximity.owns_cursor(tool)
+            || self.session_lock.active()
+            || self.capture.is_active()
+            || self.shell.overlays.confirmation_modal_active()
+            || self.shell.cluster_composer.is_active()
+        {
+            return;
+        }
+        if let Some(previous) = self.cursor.set_image(image) {
+            crate::cursor::surface::clear_outputs(&previous, &self.wayland.space);
+        }
+        crate::cursor::surface::refresh_outputs(
+            &self.cursor,
+            &self.wayland.space,
+            self.pointer.position(),
+        );
+        self.request_redraw();
+    }
 }
 
 impl<D: SessionDriver> IdleNotifierHandler for Session<D> {

@@ -78,20 +78,20 @@ mod output_origin;
 mod pointer_warp;
 #[path = "support/resize_drag.rs"]
 mod resize_drag;
-#[path = "support/tablet_nested.rs"]
-mod tablet_nested;
-#[path = "support/xwayland_tablet.rs"]
-mod xwayland_tablet;
 #[path = "support/steam_close.rs"]
 mod steam_close;
 #[path = "support/surface_dismissal.rs"]
 mod surface_dismissal;
+#[path = "support/tablet_nested.rs"]
+mod tablet_nested;
 #[path = "support/commit_timing_nested.rs"]
 mod timing_nested;
 #[path = "support/window_movement.rs"]
 mod window_movement;
 #[path = "support/x11_fullscreen_negotiation.rs"]
 mod x11_fullscreen_negotiation;
+#[path = "support/xwayland_tablet.rs"]
+mod xwayland_tablet;
 
 struct Fixture {
     path: PathBuf,

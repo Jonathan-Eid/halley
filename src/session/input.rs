@@ -1057,6 +1057,16 @@ where
     if super::touch::handle(session, event) || super::gesture::handle(session, event) {
         return;
     }
+    if matches!(
+        event,
+        InputEvent::PointerMotion { .. }
+            | InputEvent::PointerMotionAbsolute { .. }
+            | InputEvent::PointerButton { .. }
+            | InputEvent::PointerAxis { .. }
+    ) && session.tablet_proximity.clear_cursor()
+    {
+        super::pointer::reset_client_cursor_image(session);
+    }
     let position_before = session.pointer.position();
     if matches!(
         event,

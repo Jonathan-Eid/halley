@@ -4,12 +4,14 @@ use std::hash::Hash;
 pub(super) struct ProximityState<T, D = ()> {
     active: HashMap<T, D>,
     pointer_buttons: HashMap<T, std::collections::HashSet<u32>>,
+    cursor: Option<T>,
 }
 impl<T, D> Default for ProximityState<T, D> {
     fn default() -> Self {
         Self {
             active: HashMap::new(),
             pointer_buttons: HashMap::new(),
+            cursor: None,
         }
     }
 }
@@ -40,10 +42,31 @@ impl<T: Eq + Hash, D> ProximityState<T, D> {
     pub fn contains(&self, tool: &T) -> bool {
         self.active.contains_key(tool)
     }
+    pub fn cursor_activity(&mut self, tool: &T)
+    where
+        T: Clone,
+    {
+        if self.contains(tool) {
+            self.cursor = Some(tool.clone());
+        }
+    }
+    pub fn owns_cursor(&self, tool: &T) -> bool {
+        self.cursor.as_ref() == Some(tool) && self.contains(tool)
+    }
+    pub fn clear_cursor(&mut self) -> bool {
+        self.cursor.take().is_some()
+    }
+    pub fn has_cursor(&self) -> bool {
+        self.cursor.is_some()
+    }
     pub fn leave(&mut self, tool: &T) -> bool {
+        if self.cursor.as_ref() == Some(tool) {
+            self.cursor = None;
+        }
         self.active.remove(tool).is_some()
     }
     pub fn cancel_all(&mut self) -> Vec<T> {
+        self.cursor = None;
         self.active.drain().map(|(tool, _)| tool).collect()
     }
     pub fn cancel_device(&mut self, device: &D) -> Vec<T>
@@ -58,7 +81,7 @@ impl<T: Eq + Hash, D> ProximityState<T, D> {
             .map(|(tool, _)| tool.clone())
             .collect();
         for tool in &tools {
-            self.active.remove(tool);
+            self.leave(tool);
         }
         tools
     }
@@ -67,6 +90,23 @@ impl<T: Eq + Hash, D> ProximityState<T, D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_most_recent_active_tool_may_control_cursor() {
+        let mut state = ProximityState::<u8>::default();
+        state.enter(1, ());
+        state.enter(2, ());
+        state.cursor_activity(&1);
+        assert!(state.owns_cursor(&1));
+        assert!(!state.owns_cursor(&2));
+        state.cursor_activity(&2);
+        assert!(!state.owns_cursor(&1));
+        assert!(state.owns_cursor(&2));
+        state.leave(&2);
+        assert!(!state.owns_cursor(&2));
+        state.cursor_activity(&2);
+        assert!(!state.owns_cursor(&2));
+    }
 
     #[test]
     fn removing_one_device_keeps_other_tools_active() {
