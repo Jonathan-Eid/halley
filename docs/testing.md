@@ -142,6 +142,12 @@ executable, not `target/release/halley`. Its second output and private input soc
 are compiled under `cfg(test)` and are absent from normal compositor builds.
 Running ordinary workspace tests does not launch this server.
 
+The ignored `xwayland_tablet::xwayland_tablet_tool_and_pressure` test also
+requires `xinput` and `stdbuf`. It injects a synthetic tablet through this server
+and checks the real XWayland device names, XI2 raw pressure values and tip
+transitions. Raw events do not establish delivery to a particular X11 window or
+Krita; those require a separate client-targeted test.
+
 The three tests cover twelve scenarios across both monitor directions:
 
 - Ordinary native apps with client, compositor and overlapping fullscreen ownership.

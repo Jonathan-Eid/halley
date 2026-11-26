@@ -80,6 +80,8 @@ mod pointer_warp;
 mod resize_drag;
 #[path = "support/tablet_nested.rs"]
 mod tablet_nested;
+#[path = "support/xwayland_tablet.rs"]
+mod xwayland_tablet;
 #[path = "support/steam_close.rs"]
 mod steam_close;
 #[path = "support/surface_dismissal.rs"]
