@@ -400,3 +400,64 @@ fn tablet_recovers_after_proximity_without_output_geometry() {
         "tip must not reach stale focus"
     );
 }
+
+#[test]
+#[ignore = "requires a Wayland desktop, XWayland and HALLEY_TEST_WINIT_SERVER"]
+fn pointer_only_client_receives_pen_tip() {
+    let mut fixture = Fixture::with_two_outputs("animations:\n enabled false\nend\n");
+    let input = fullscreen_multi_output::Input::new(&fixture);
+    let (mut queue, mut client) = native_window_named(
+        &fixture,
+        "Pointer fallback",
+        "halley.test.fallback",
+        [0, u32::MAX, 0, u32::MAX],
+    );
+    let node = fixture.node("Pointer fallback");
+    fullscreen_multi_output::place(&mut fixture, node.id, false);
+    let handle = queue.handle();
+    let seat: wl_seat::WlSeat =
+        client
+            .registry
+            .as_ref()
+            .unwrap()
+            .bind(client.globals["wl_seat"], 8, &handle, ());
+    let _pointer = seat.get_pointer(&handle, ());
+    queue.roundtrip(&mut client).unwrap();
+    let state = input.state();
+    let window = state["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == node.id)
+        .unwrap();
+    let rect = window["client_geometry"].as_array().unwrap();
+    let output = state["primary_geometry"].as_array().unwrap();
+    let nx = (rect[0].as_f64().unwrap() + rect[2].as_f64().unwrap() / 2.0
+        - output[0].as_f64().unwrap())
+        / output[2].as_f64().unwrap();
+    let ny = (rect[1].as_f64().unwrap() + rect[3].as_f64().unwrap() / 2.0
+        - output[1].as_f64().unwrap())
+        / output[3].as_f64().unwrap();
+    input.command("tablet-add 1");
+    input.command(&format!("tablet-proximity 1 42 {nx} {ny} 0.0 in"));
+    input.command(&format!("tablet-tip 1 42 {nx} {ny} 0.8 down"));
+    input.command(&format!("tablet-tip 1 42 {nx} {ny} 0.0 up"));
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(
+        client.pointer_buttons,
+        vec![
+            (
+                272,
+                wayland_client::WEnum::Value(
+                    wayland_client::protocol::wl_pointer::ButtonState::Pressed
+                )
+            ),
+            (
+                272,
+                wayland_client::WEnum::Value(
+                    wayland_client::protocol::wl_pointer::ButtonState::Released
+                )
+            )
+        ]
+    );
+}
