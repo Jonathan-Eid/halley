@@ -17,8 +17,9 @@ impl Dispatch<relative::ZwpRelativePointerV1, ()> for NativeState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if matches!(event, relative::Event::RelativeMotion { .. }) {
+        if let relative::Event::RelativeMotion { dx, dy, .. } = event {
             state.pointer_warp.relative_motions += 1;
+            state.pointer_warp.relative_deltas.push((dx, dy));
         }
     }
 }

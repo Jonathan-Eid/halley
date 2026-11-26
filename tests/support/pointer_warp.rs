@@ -18,6 +18,7 @@ pub(super) struct Observations {
     pub(super) locked: bool,
     pub(super) confined: bool,
     pub(super) relative_motions: usize,
+    pub(super) relative_deltas: Vec<(f64, f64)>,
 }
 
 impl Dispatch<wl_pointer::WlPointer, ()> for NativeState {

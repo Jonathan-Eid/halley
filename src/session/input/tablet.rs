@@ -104,6 +104,11 @@ fn pointer_motion<D: SessionDriver>(
     time: smithay::backend::input::InputTime,
 ) -> bool {
     let held = session.tablet_proximity.pointer_held(desc);
+    let previous_physical = position.and_then(|position| {
+        session
+            .tablet_proximity
+            .physical_position(desc.clone(), position)
+    });
     // Do not inject a second device into another pointer or tablet grab.
     if !held && (tool.is_grabbed() || session.pointer_handle().is_grabbed()) {
         return false;
@@ -120,7 +125,7 @@ fn pointer_motion<D: SessionDriver>(
             session.pointer.set_position(before);
             pointer.set_location(pointer_before);
             if let Some(position) = position {
-                let delta = position - smithay::utils::Point::from(before);
+                let delta = position - previous_physical.unwrap_or(position);
                 pointer.relative_motion(
                     session,
                     Some((surface, origin)),

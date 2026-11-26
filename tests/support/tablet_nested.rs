@@ -709,6 +709,15 @@ fn pointer_lock_blocks_tablet_fallback_motion() {
         &handle,
         (),
     );
+    use wayland_protocols::wp::relative_pointer::zv1::client::zwp_relative_pointer_manager_v1 as relative_manager;
+    let relative_manager: relative_manager::ZwpRelativePointerManagerV1 =
+        client.registry.as_ref().unwrap().bind(
+            client.globals["zwp_relative_pointer_manager_v1"],
+            1,
+            &handle,
+            (),
+        );
+    let _relative = relative_manager.get_relative_pointer(&_pointer, &handle, ());
     let _lock = manager.lock_pointer(
         client.surface.as_ref().unwrap(),
         &_pointer,
@@ -728,6 +737,18 @@ fn pointer_lock_blocks_tablet_fallback_motion() {
         ny + 0.03
     ));
     queue.roundtrip(&mut client).unwrap();
+    input.command(&format!(
+        "tablet-axis 1 42 {} {} 0.5 in",
+        nx + 0.06,
+        ny + 0.06
+    ));
+    queue.roundtrip(&mut client).unwrap();
+    let deltas = &client.pointer_warp.relative_deltas;
+    assert_eq!(deltas.len(), 2, "expected two relative motions: {deltas:?}");
+    assert!(
+        (deltas[0].0 - deltas[1].0).abs() < 0.1,
+        "equal physical movements must produce equal relative deltas: {deltas:?}"
+    );
     assert_eq!(
         client.pointer_warp.motions, motions,
         "locked pointer must not receive absolute tablet motion"
@@ -793,6 +814,17 @@ fn pointer_confinement_clamps_tablet_fallback_motion() {
         queue.roundtrip(&mut client).unwrap();
         client.pointer_warp.confined.then_some(())
     });
+    let before = client.pointer_warp.position.unwrap();
+    input.command(&format!("tablet-axis 1 42 {} {} 0.5 in", nx + 0.01, ny));
+    queue.roundtrip(&mut client).unwrap();
+    input.command(&format!("tablet-axis 1 42 {} {} 0.5 in", nx + 0.02, ny));
+    queue.roundtrip(&mut client).unwrap();
+    assert!(client.pointer_warp.confined);
+    assert!(
+        (client.pointer_warp.position.unwrap().0 - before.0 - 0.02 * output[2].as_f64().unwrap())
+            .abs()
+            < 2.0
+    );
     input.command("tablet-axis 1 42 1.0 1.0 0.5 in");
     queue.roundtrip(&mut client).unwrap();
     assert!(
@@ -804,6 +836,10 @@ fn pointer_confinement_clamps_tablet_fallback_motion() {
         "tablet motion must preserve pointer focus"
     );
     let (x, y) = client.pointer_warp.position.unwrap();
+    assert!(
+        x > rect[2].as_f64().unwrap() - 2.0,
+        "out-of-region motion must reach the confinement edge: {x}, {y}"
+    );
     assert!(
         x >= 0.0 && x <= rect[2].as_f64().unwrap() && y >= 0.0 && y <= rect[3].as_f64().unwrap(),
         "confined position must remain within the surface: {x}, {y}"
@@ -876,6 +912,232 @@ fn tablet_titlebar_drag_moves_window() {
     assert_ne!(
         moved, window["client_geometry"],
         "pen motion must move the window"
+    );
+    input.command(&format!(
+        "tablet-tip 1 42 {} {} 0.0 up",
+        nx(x + 60.0),
+        ny(y + 30.0)
+    ));
+    assert_eq!(
+        input.state()["moving"],
+        false,
+        "pen release must finish move"
+    );
+}
+
+#[test]
+#[ignore = "requires Wayland, XWayland and HALLEY_TEST_WINIT_SERVER"]
+fn locked_pointer_ignores_physical_titlebar_drag() {
+    let mut fixture = Fixture::with_two_outputs(
+        "animations:\n enabled false\nend\ndecorations:\n titlebars:\n  enabled true\n  height 32\n end\nend\n",
+    );
+    let input = fullscreen_multi_output::Input::new(&fixture);
+    let (mut queue, mut client) = native_window_named(
+        &fixture,
+        "Pen drag",
+        "halley.test.pen-drag",
+        [0, u32::MAX, 0, u32::MAX],
+    );
+    let manager: zxdg_decoration_manager_v1::ZxdgDecorationManagerV1 =
+        client.registry.as_ref().unwrap().bind(
+            client.globals["zxdg_decoration_manager_v1"],
+            1,
+            &queue.handle(),
+            (),
+        );
+    let decoration =
+        manager.get_toplevel_decoration(client.toplevel.as_ref().unwrap(), &queue.handle(), ());
+    decoration.set_mode(zxdg_toplevel_decoration_v1::Mode::ServerSide);
+    queue.roundtrip(&mut client).unwrap();
+    queue.roundtrip(&mut client).unwrap();
+    let node = fixture.node("Pen drag");
+    fullscreen_multi_output::place(&mut fixture, node.id, false);
+    let state = input.state();
+    let window = state["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == node.id)
+        .unwrap();
+    let r = window["rect"].as_array().unwrap();
+    let client_rect = window["client_geometry"].as_array().unwrap();
+    let output = state["primary_geometry"].as_array().unwrap();
+    let x = r[0].as_f64().unwrap() + r[2].as_f64().unwrap() / 2.0;
+    let scale = r[3].as_f64().unwrap() / client_rect[3].as_f64().unwrap();
+    let y = r[1].as_f64().unwrap() - 16.0 * scale;
+    let nx = |x: f64| (x - output[0].as_f64().unwrap()) / output[2].as_f64().unwrap();
+    // Winit exposes its primary output with a vertically flipped transform.
+    let ny = |y: f64| 1.0 - (y - output[1].as_f64().unwrap()) / output[3].as_f64().unwrap();
+    let handle = queue.handle();
+    let seat: wl_seat::WlSeat =
+        client
+            .registry
+            .as_ref()
+            .unwrap()
+            .bind(client.globals["wl_seat"], 8, &handle, ());
+    let pointer = seat.get_pointer(&handle, ());
+    queue.roundtrip(&mut client).unwrap();
+    input.command("tablet-add 1");
+    let cy = client_rect[1].as_f64().unwrap() + client_rect[3].as_f64().unwrap() / 2.0;
+    input.command(&format!(
+        "tablet-proximity 1 42 {} {} 0.0 in",
+        nx(x),
+        ny(cy)
+    ));
+    queue.roundtrip(&mut client).unwrap();
+    use wayland_protocols::wp::pointer_constraints::zv1::client::zwp_pointer_constraints_v1 as constraints;
+    let manager: constraints::ZwpPointerConstraintsV1 = client.registry.as_ref().unwrap().bind(
+        client.globals["zwp_pointer_constraints_v1"],
+        1,
+        &handle,
+        (),
+    );
+    let _lock = manager.lock_pointer(
+        client.surface.as_ref().unwrap(),
+        &pointer,
+        None,
+        constraints::Lifetime::Persistent,
+        &handle,
+        (),
+    );
+    wait_for("pointer lock", || {
+        queue.roundtrip(&mut client).unwrap();
+        client.pointer_warp.locked.then_some(())
+    });
+    input.command(&format!("tablet-tip 1 42 {} {} 0.8 down", nx(x), ny(y)));
+    input.command(&format!(
+        "tablet-axis 1 42 {} {} 0.8 in",
+        nx(x + 60.0),
+        ny(y + 30.0)
+    ));
+    assert_eq!(
+        input.state()["moving"],
+        false,
+        "locked pen must not start compositor move"
+    );
+    let moved = input.state()["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == node.id)
+        .unwrap()["client_geometry"]
+        .clone();
+    assert_eq!(
+        moved, window["client_geometry"],
+        "locked pen must not move the window"
+    );
+    input.command(&format!(
+        "tablet-tip 1 42 {} {} 0.0 up",
+        nx(x + 60.0),
+        ny(y + 30.0)
+    ));
+    assert_eq!(
+        input.state()["moving"],
+        false,
+        "pen release must finish move"
+    );
+}
+
+#[test]
+#[ignore = "requires Wayland, XWayland and HALLEY_TEST_WINIT_SERVER"]
+fn confined_pointer_ignores_physical_titlebar_drag() {
+    let mut fixture = Fixture::with_two_outputs(
+        "animations:\n enabled false\nend\ndecorations:\n titlebars:\n  enabled true\n  height 32\n end\nend\n",
+    );
+    let input = fullscreen_multi_output::Input::new(&fixture);
+    let (mut queue, mut client) = native_window_named(
+        &fixture,
+        "Pen drag",
+        "halley.test.pen-drag",
+        [0, u32::MAX, 0, u32::MAX],
+    );
+    let manager: zxdg_decoration_manager_v1::ZxdgDecorationManagerV1 =
+        client.registry.as_ref().unwrap().bind(
+            client.globals["zxdg_decoration_manager_v1"],
+            1,
+            &queue.handle(),
+            (),
+        );
+    let decoration =
+        manager.get_toplevel_decoration(client.toplevel.as_ref().unwrap(), &queue.handle(), ());
+    decoration.set_mode(zxdg_toplevel_decoration_v1::Mode::ServerSide);
+    queue.roundtrip(&mut client).unwrap();
+    queue.roundtrip(&mut client).unwrap();
+    let node = fixture.node("Pen drag");
+    fullscreen_multi_output::place(&mut fixture, node.id, false);
+    let state = input.state();
+    let window = state["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == node.id)
+        .unwrap();
+    let r = window["rect"].as_array().unwrap();
+    let client_rect = window["client_geometry"].as_array().unwrap();
+    let output = state["primary_geometry"].as_array().unwrap();
+    let x = r[0].as_f64().unwrap() + r[2].as_f64().unwrap() / 2.0;
+    let scale = r[3].as_f64().unwrap() / client_rect[3].as_f64().unwrap();
+    let y = r[1].as_f64().unwrap() - 16.0 * scale;
+    let nx = |x: f64| (x - output[0].as_f64().unwrap()) / output[2].as_f64().unwrap();
+    // Winit exposes its primary output with a vertically flipped transform.
+    let ny = |y: f64| 1.0 - (y - output[1].as_f64().unwrap()) / output[3].as_f64().unwrap();
+    let handle = queue.handle();
+    let seat: wl_seat::WlSeat =
+        client
+            .registry
+            .as_ref()
+            .unwrap()
+            .bind(client.globals["wl_seat"], 8, &handle, ());
+    let pointer = seat.get_pointer(&handle, ());
+    queue.roundtrip(&mut client).unwrap();
+    input.command("tablet-add 1");
+    let cy = client_rect[1].as_f64().unwrap() + client_rect[3].as_f64().unwrap() / 2.0;
+    input.command(&format!(
+        "tablet-proximity 1 42 {} {} 0.0 in",
+        nx(x),
+        ny(cy)
+    ));
+    queue.roundtrip(&mut client).unwrap();
+    use wayland_protocols::wp::pointer_constraints::zv1::client::zwp_pointer_constraints_v1 as constraints;
+    let manager: constraints::ZwpPointerConstraintsV1 = client.registry.as_ref().unwrap().bind(
+        client.globals["zwp_pointer_constraints_v1"],
+        1,
+        &handle,
+        (),
+    );
+    let _lock = manager.confine_pointer(
+        client.surface.as_ref().unwrap(),
+        &pointer,
+        None,
+        constraints::Lifetime::Persistent,
+        &handle,
+        (),
+    );
+    wait_for("pointer lock", || {
+        queue.roundtrip(&mut client).unwrap();
+        client.pointer_warp.confined.then_some(())
+    });
+    input.command(&format!("tablet-tip 1 42 {} {} 0.8 down", nx(x), ny(y)));
+    input.command(&format!(
+        "tablet-axis 1 42 {} {} 0.8 in",
+        nx(x + 60.0),
+        ny(y + 30.0)
+    ));
+    assert_eq!(
+        input.state()["moving"],
+        false,
+        "confined pen must not start compositor move"
+    );
+    let moved = input.state()["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == node.id)
+        .unwrap()["client_geometry"]
+        .clone();
+    assert_eq!(
+        moved, window["client_geometry"],
+        "confined pen must not move the window"
     );
     input.command(&format!(
         "tablet-tip 1 42 {} {} 0.0 up",

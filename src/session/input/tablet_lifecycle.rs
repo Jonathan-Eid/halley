@@ -6,6 +6,7 @@ pub(super) struct ProximityState<T, D = ()> {
     pointer_buttons: HashMap<T, std::collections::HashSet<u32>>,
     cursor: Option<T>,
     decoration: Option<T>,
+    physical_positions: HashMap<T, smithay::utils::Point<f64, smithay::utils::Logical>>,
 }
 impl<T, D> Default for ProximityState<T, D> {
     fn default() -> Self {
@@ -14,6 +15,7 @@ impl<T, D> Default for ProximityState<T, D> {
             pointer_buttons: HashMap::new(),
             cursor: None,
             decoration: None,
+            physical_positions: HashMap::new(),
         }
     }
 }
@@ -78,7 +80,15 @@ impl<T: Eq + Hash, D> ProximityState<T, D> {
     pub fn has_cursor(&self) -> bool {
         self.cursor.is_some()
     }
+    pub fn physical_position(
+        &mut self,
+        tool: T,
+        position: smithay::utils::Point<f64, smithay::utils::Logical>,
+    ) -> Option<smithay::utils::Point<f64, smithay::utils::Logical>> {
+        self.physical_positions.insert(tool, position)
+    }
     pub fn leave(&mut self, tool: &T) -> bool {
+        self.physical_positions.remove(tool);
         if self.cursor.as_ref() == Some(tool) {
             self.cursor = None;
         }
@@ -86,6 +96,7 @@ impl<T: Eq + Hash, D> ProximityState<T, D> {
     }
     pub fn cancel_all(&mut self) -> Vec<T> {
         self.cursor = None;
+        self.physical_positions.clear();
         self.active.drain().map(|(tool, _)| tool).collect()
     }
     pub fn cancel_device(&mut self, device: &D) -> Vec<T>
