@@ -90,30 +90,24 @@ fn pointer_motion<D: SessionDriver>(
     if !held && (tool.is_grabbed() || session.pointer_handle().is_grabbed()) {
         return false;
     }
-    let Some(route) = route else {
-        return held;
-    };
-    let Some((surface, _)) = route.focus.as_ref() else {
-        return held;
-    };
-    let Some(client) = surface.client() else {
-        return held;
-    };
-    if !held && tool.client_tools(&client).next().is_some() {
-        return false;
-    }
     let pointer = session.pointer_handle();
+    let focus = route.and_then(|route| route.focus.clone());
+    let eligible = focus
+        .as_ref()
+        .and_then(|(surface, _)| surface.client())
+        .is_some_and(|client| held || tool.client_tools(&client).next().is_none());
+    let location = route.map_or_else(|| pointer.current_location(), |route| route.location);
     pointer.motion(
         session,
-        route.focus.clone(),
+        if held || eligible { focus } else { None },
         &smithay::input::pointer::MotionEvent {
-            location: route.location,
+            location,
             serial: SERIAL_COUNTER.next_serial(),
             time,
         },
     );
     pointer.frame(session);
-    true
+    held || eligible
 }
 
 fn pointer_button<D: SessionDriver>(

@@ -510,6 +510,19 @@ fn pointer_only_client_receives_pen_tip() {
             )
         ]
     );
+    // Hovering off a pointer-only surface must end its wl_pointer focus.
+    input.command(&format!("tablet-axis 1 42 {nx} {ny} 0.0 in"));
+    queue.roundtrip(&mut client).unwrap();
+    assert!(
+        client.pointer_warp.enter.is_some(),
+        "pen must focus the client"
+    );
+    input.command("tablet-axis 1 42 1.0 1.0 0.0 in");
+    queue.roundtrip(&mut client).unwrap();
+    assert!(
+        client.pointer_warp.enter.is_none(),
+        "background must clear stale pointer focus"
+    );
     // Entering capture cancels a held emulated button and suppresses later tip input.
     client.pointer_buttons.clear();
     input.command(&format!("tablet-axis 1 42 {nx} {ny} 0.0 in"));
