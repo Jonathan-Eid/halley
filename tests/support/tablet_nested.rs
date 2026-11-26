@@ -568,3 +568,244 @@ fn pointer_only_client_receives_pen_tip() {
     input.key(1, false);
     request.join().unwrap();
 }
+
+#[test]
+#[ignore = "requires a Wayland desktop, XWayland and HALLEY_TEST_WINIT_SERVER"]
+fn lock_releases_held_pointer_fallback() {
+    let mut fixture = Fixture::with_two_outputs("animations:\n enabled false\nend\n");
+    let input = fullscreen_multi_output::Input::new(&fixture);
+    let (mut queue, mut client) = native_window_named(
+        &fixture,
+        "Pointer fallback",
+        "halley.test.fallback",
+        [0, u32::MAX, 0, u32::MAX],
+    );
+    let node = fixture.node("Pointer fallback");
+    fullscreen_multi_output::place(&mut fixture, node.id, false);
+    let handle = queue.handle();
+    let seat: wl_seat::WlSeat =
+        client
+            .registry
+            .as_ref()
+            .unwrap()
+            .bind(client.globals["wl_seat"], 8, &handle, ());
+    let _pointer = seat.get_pointer(&handle, ());
+    queue.roundtrip(&mut client).unwrap();
+    let state = input.state();
+    let window = state["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == node.id)
+        .unwrap();
+    let rect = window["client_geometry"].as_array().unwrap();
+    let output = state["primary_geometry"].as_array().unwrap();
+    let nx = (rect[0].as_f64().unwrap() + rect[2].as_f64().unwrap() / 2.0
+        - output[0].as_f64().unwrap())
+        / output[2].as_f64().unwrap();
+    let ny = (rect[1].as_f64().unwrap() + rect[3].as_f64().unwrap() / 2.0
+        - output[1].as_f64().unwrap())
+        / output[3].as_f64().unwrap();
+    input.command("tablet-add 1");
+    input.command(&format!("tablet-proximity 1 42 {nx} {ny} 0.0 in"));
+    input.command(&format!("tablet-tip 1 42 {nx} {ny} 0.8 down"));
+    input.command("tablet-axis 1 42 1.0 1.0 0.8 in");
+    input.command("tablet-tip 1 42 1.0 1.0 0.0 up");
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(
+        client.pointer_buttons,
+        vec![
+            (
+                272,
+                wayland_client::WEnum::Value(
+                    wayland_client::protocol::wl_pointer::ButtonState::Pressed
+                )
+            ),
+            (
+                272,
+                wayland_client::WEnum::Value(
+                    wayland_client::protocol::wl_pointer::ButtonState::Released
+                )
+            )
+        ]
+    );
+    client.pointer_buttons.clear();
+    input.command(&format!("tablet-axis 1 42 {nx} {ny} 0.0 in"));
+    input.command(&format!("tablet-tip 1 42 {nx} {ny} 0.8 down"));
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(client.pointer_buttons.len(), 1);
+    use wayland_protocols::ext::session_lock::v1::client::ext_session_lock_manager_v1;
+    let manager: ext_session_lock_manager_v1::ExtSessionLockManagerV1 =
+        client.registry.as_ref().unwrap().bind(
+            client.globals["ext_session_lock_manager_v1"],
+            1,
+            &handle,
+            (),
+        );
+    let _lock = manager.lock(&handle, ());
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(
+        client.pointer_buttons.len(),
+        2,
+        "lock must release held fallback button"
+    );
+    assert_eq!(
+        client.pointer_buttons[1].1,
+        wayland_client::WEnum::Value(wayland_client::protocol::wl_pointer::ButtonState::Released)
+    );
+    input.command(&format!("tablet-tip 1 42 {nx} {ny} 0.0 up"));
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(
+        client.pointer_buttons.len(),
+        2,
+        "lock must suppress further fallback input"
+    );
+}
+
+#[test]
+#[ignore = "requires a Wayland desktop, XWayland and HALLEY_TEST_WINIT_SERVER"]
+fn pointer_lock_blocks_tablet_fallback_motion() {
+    let mut fixture = Fixture::with_two_outputs("animations:\n enabled false\nend\n");
+    let input = fullscreen_multi_output::Input::new(&fixture);
+    let (mut queue, mut client) = native_window_named(
+        &fixture,
+        "Pointer fallback",
+        "halley.test.fallback",
+        [0, u32::MAX, 0, u32::MAX],
+    );
+    let node = fixture.node("Pointer fallback");
+    fullscreen_multi_output::place(&mut fixture, node.id, false);
+    let handle = queue.handle();
+    let seat: wl_seat::WlSeat =
+        client
+            .registry
+            .as_ref()
+            .unwrap()
+            .bind(client.globals["wl_seat"], 8, &handle, ());
+    let _pointer = seat.get_pointer(&handle, ());
+    queue.roundtrip(&mut client).unwrap();
+    let state = input.state();
+    let window = state["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == node.id)
+        .unwrap();
+    let rect = window["client_geometry"].as_array().unwrap();
+    let output = state["primary_geometry"].as_array().unwrap();
+    let nx = (rect[0].as_f64().unwrap() + rect[2].as_f64().unwrap() / 2.0
+        - output[0].as_f64().unwrap())
+        / output[2].as_f64().unwrap();
+    let ny = (rect[1].as_f64().unwrap() + rect[3].as_f64().unwrap() / 2.0
+        - output[1].as_f64().unwrap())
+        / output[3].as_f64().unwrap();
+    input.command("tablet-add 1");
+    input.command(&format!("tablet-proximity 1 42 {nx} {ny} 0.0 in"));
+    queue.roundtrip(&mut client).unwrap();
+    use wayland_protocols::wp::pointer_constraints::zv1::client::zwp_pointer_constraints_v1 as constraints;
+    let manager: constraints::ZwpPointerConstraintsV1 = client.registry.as_ref().unwrap().bind(
+        client.globals["zwp_pointer_constraints_v1"],
+        1,
+        &handle,
+        (),
+    );
+    let _lock = manager.lock_pointer(
+        client.surface.as_ref().unwrap(),
+        &_pointer,
+        None,
+        constraints::Lifetime::Persistent,
+        &handle,
+        (),
+    );
+    wait_for("pointer lock", || {
+        queue.roundtrip(&mut client).unwrap();
+        client.pointer_warp.locked.then_some(())
+    });
+    let motions = client.pointer_warp.motions;
+    input.command(&format!(
+        "tablet-axis 1 42 {} {} 0.5 in",
+        nx + 0.03,
+        ny + 0.03
+    ));
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(
+        client.pointer_warp.motions, motions,
+        "locked pointer must not receive absolute tablet motion"
+    );
+}
+
+#[test]
+#[ignore = "requires a Wayland desktop, XWayland and HALLEY_TEST_WINIT_SERVER"]
+fn pointer_confinement_clamps_tablet_fallback_motion() {
+    let mut fixture = Fixture::with_two_outputs("animations:\n enabled false\nend\n");
+    let input = fullscreen_multi_output::Input::new(&fixture);
+    let (mut queue, mut client) = native_window_named(
+        &fixture,
+        "Pointer fallback",
+        "halley.test.fallback",
+        [0, u32::MAX, 0, u32::MAX],
+    );
+    let node = fixture.node("Pointer fallback");
+    fullscreen_multi_output::place(&mut fixture, node.id, false);
+    let handle = queue.handle();
+    let seat: wl_seat::WlSeat =
+        client
+            .registry
+            .as_ref()
+            .unwrap()
+            .bind(client.globals["wl_seat"], 8, &handle, ());
+    let _pointer = seat.get_pointer(&handle, ());
+    queue.roundtrip(&mut client).unwrap();
+    let state = input.state();
+    let window = state["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == node.id)
+        .unwrap();
+    let rect = window["client_geometry"].as_array().unwrap();
+    let output = state["primary_geometry"].as_array().unwrap();
+    let nx = (rect[0].as_f64().unwrap() + rect[2].as_f64().unwrap() / 2.0
+        - output[0].as_f64().unwrap())
+        / output[2].as_f64().unwrap();
+    let ny = (rect[1].as_f64().unwrap() + rect[3].as_f64().unwrap() / 2.0
+        - output[1].as_f64().unwrap())
+        / output[3].as_f64().unwrap();
+    input.command("tablet-add 1");
+    input.command(&format!("tablet-proximity 1 42 {nx} {ny} 0.0 in"));
+    queue.roundtrip(&mut client).unwrap();
+    use wayland_protocols::wp::pointer_constraints::zv1::client::zwp_pointer_constraints_v1 as constraints;
+    let manager: constraints::ZwpPointerConstraintsV1 = client.registry.as_ref().unwrap().bind(
+        client.globals["zwp_pointer_constraints_v1"],
+        1,
+        &handle,
+        (),
+    );
+    let _confine = manager.confine_pointer(
+        client.surface.as_ref().unwrap(),
+        &_pointer,
+        None,
+        constraints::Lifetime::Persistent,
+        &handle,
+        (),
+    );
+    wait_for("pointer confinement", || {
+        queue.roundtrip(&mut client).unwrap();
+        client.pointer_warp.confined.then_some(())
+    });
+    input.command("tablet-axis 1 42 1.0 1.0 0.5 in");
+    queue.roundtrip(&mut client).unwrap();
+    assert!(
+        client.pointer_warp.confined,
+        "tablet motion must not drop confinement"
+    );
+    assert!(
+        client.pointer_warp.enter.is_some(),
+        "tablet motion must preserve pointer focus"
+    );
+    let (x, y) = client.pointer_warp.position.unwrap();
+    assert!(
+        x >= 0.0 && x <= rect[2].as_f64().unwrap() && y >= 0.0 && y <= rect[3].as_f64().unwrap(),
+        "confined position must remain within the surface: {x}, {y}"
+    );
+}

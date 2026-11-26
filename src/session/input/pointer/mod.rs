@@ -663,6 +663,18 @@ pub(super) fn constrain_motion<D: SessionDriver>(
     }
 }
 
+pub(super) fn confined_focus<D: SessionDriver>(
+    session: &Session<D>,
+    pointer: &PointerHandle<Session<D>>,
+) -> Option<(WlSurface, Point<f64, Logical>)> {
+    if constraints::enforcement_suspended(session, pointer) {
+        return None;
+    }
+    let constraint = constraints::active(session, pointer)?;
+    (constraint.kind == constraints::ConstraintKind::Confined)
+        .then_some((constraint.surface, constraint.origin))
+}
+
 pub(super) fn constraint_suspended_for_grab<D: SessionDriver>(session: &Session<D>) -> bool {
     session
         .seat

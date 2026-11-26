@@ -83,6 +83,7 @@ fn pointer_motion<D: SessionDriver>(
     tool: &smithay::input::tablet::tool::TabletToolHandle<Session<D>>,
     desc: &smithay::backend::input::TabletToolDescriptor,
     route: Option<&crate::input::pointer::PointerRoute>,
+    position: Option<smithay::utils::Point<f64, smithay::utils::Logical>>,
     time: smithay::backend::input::InputTime,
 ) -> bool {
     let held = session.tablet_proximity.pointer_held(desc);
@@ -91,12 +92,56 @@ fn pointer_motion<D: SessionDriver>(
         return false;
     }
     let pointer = session.pointer_handle();
-    let focus = route.and_then(|route| route.focus.clone());
+    let before = session.pointer.position();
+    let pointer_before = pointer.current_location();
+    if let Some(position) = position {
+        session.pointer.set_position(position.into());
+    }
+    let constrained = super::pointer::constrain_motion(session, &pointer);
+    let corrected_route = match constrained {
+        super::pointer::ConstrainedMotion::RelativeOnly { surface, origin } => {
+            session.pointer.set_position(before);
+            pointer.set_location(pointer_before);
+            if let Some(position) = position {
+                let delta = position - smithay::utils::Point::from(before);
+                pointer.relative_motion(
+                    session,
+                    Some((surface, origin)),
+                    &smithay::input::pointer::RelativeMotionEvent {
+                        delta,
+                        delta_unaccel: delta,
+                        time,
+                    },
+                );
+                pointer.frame(session);
+            }
+            return held || pointer.current_focus().is_some();
+        }
+        super::pointer::ConstrainedMotion::Clamp(position) => {
+            session.pointer.set_position(position.into());
+            super::touch::route(session, position)
+        }
+        super::pointer::ConstrainedMotion::Apply => position.and_then(|proposed| {
+            let effective = smithay::utils::Point::from(session.pointer.position());
+            (effective != proposed)
+                .then(|| super::touch::route(session, effective))
+                .flatten()
+        }),
+    };
+    let route = corrected_route.as_ref().or(route);
+    let confined = super::pointer::confined_focus(session, &pointer);
+    let focus = confined
+        .clone()
+        .or_else(|| route.and_then(|route| route.focus.clone()));
     let eligible = focus
         .as_ref()
         .and_then(|(surface, _)| surface.client())
         .is_some_and(|client| held || tool.client_tools(&client).next().is_none());
-    let location = route.map_or_else(|| pointer.current_location(), |route| route.location);
+    let location = if confined.is_some() {
+        pointer.current_location()
+    } else {
+        route.map_or_else(|| pointer.current_location(), |route| route.location)
+    };
     pointer.motion(
         session,
         if held || eligible { focus } else { None },
@@ -201,6 +246,13 @@ fn update_cursor<D: SessionDriver>(
         }
         return;
     };
+    let position = if super::pointer::has_active_constraint(session)
+        && !super::pointer::constraint_suspended_for_grab(session)
+    {
+        session.pointer.position().into()
+    } else {
+        position
+    };
     let changed_owner = !session.tablet_proximity.owns_cursor(descriptor);
     session.tablet_proximity.cursor_activity(descriptor);
     if changed_owner || session.tablet_cursor_focus != focus {
@@ -284,7 +336,14 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
                         let display = session.wayland.display_handle.clone();
                         seat.add_wp_tool(session, &display, &descriptor)
                     });
-                    pointer_motion(session, &tool, &descriptor, route.as_ref(), event.time());
+                    pointer_motion(
+                        session,
+                        &tool,
+                        &descriptor,
+                        route.as_ref(),
+                        position,
+                        event.time(),
+                    );
                     // Keep the physical tool in proximity without focusing a surface;
                     // a later positioned event can then establish focus.
                     let (focus, location) = route
@@ -321,7 +380,14 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
             };
             let position = tablet_position::<D, B, _>(session, event);
             let route = position.and_then(|position| super::touch::route(session, position));
-            pointer_motion(session, &tool, &descriptor, route.as_ref(), event.time());
+            pointer_motion(
+                session,
+                &tool,
+                &descriptor,
+                route.as_ref(),
+                position,
+                event.time(),
+            );
             let (focus, location) = route.map_or((None, position.unwrap_or_default()), |route| {
                 (route.focus, route.location)
             });
@@ -347,7 +413,12 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
             if let Some(tool) = seat.get_tool(&descriptor) {
                 if let Some(position) = tablet_position::<D, B, _>(session, event) {
                     let route = super::touch::route(session, position);
-                    if matches!(event.tip_state(), TabletToolTipState::Down) {
+                    if matches!(event.tip_state(), TabletToolTipState::Down)
+                        && !super::pointer::has_active_constraint(session)
+                        && (!session.pointer_handle().is_grabbed()
+                            || session.tablet_proximity.pointer_held(&descriptor))
+                        && !tool.is_grabbed()
+                    {
                         if let Some(route) = &route {
                             crate::wayland::focus::select_output(
                                 &mut session.wayland,
@@ -368,8 +439,14 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
                             }
                         }
                     }
-                    let eligible =
-                        pointer_motion(session, &tool, &descriptor, route.as_ref(), event.time());
+                    let eligible = pointer_motion(
+                        session,
+                        &tool,
+                        &descriptor,
+                        route.as_ref(),
+                        Some(position),
+                        event.time(),
+                    );
                     let state = match event.tip_state() {
                         TabletToolTipState::Down => ButtonState::Pressed,
                         TabletToolTipState::Up => ButtonState::Released,
