@@ -138,20 +138,23 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
                     }
                 }
                 ProximityState::In => {
-                    let Some(position) = tablet_position::<D, B, _>(session, event) else {
-                        return true;
-                    };
+                    let position = tablet_position::<D, B, _>(session, event);
                     let Some(tablet) = seat.get_tablet(&TabletDescriptor::from(&event.device()))
                     else {
                         return true;
                     };
-                    let route = super::touch::route(session, position);
+                    let route =
+                        position.and_then(|position| super::touch::route(session, position));
                     let tool = seat.get_tool(&descriptor).unwrap_or_else(|| {
                         let display = session.wayland.display_handle.clone();
                         seat.add_wp_tool(session, &display, &descriptor)
                     });
-                    let (focus, location) =
-                        route.map_or((None, position), |route| (route.focus, route.location));
+                    // Keep the physical tool in proximity without focusing a surface;
+                    // a later positioned event can then establish focus.
+                    let (focus, location) = route
+                        .map_or((None, position.unwrap_or_default()), |route| {
+                            (route.focus, route.location)
+                        });
                     tool.proximity_in(
                         session,
                         focus,
@@ -178,11 +181,11 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
             let Some(tool) = seat.get_tool(&descriptor) else {
                 return true;
             };
-            let Some(position) = tablet_position::<D, B, _>(session, event) else {
-                return true;
-            };
-            let (focus, location) = super::touch::route(session, position)
-                .map_or((None, position), |route| (route.focus, route.location));
+            let position = tablet_position::<D, B, _>(session, event);
+            let route = position.and_then(|position| super::touch::route(session, position));
+            let (focus, location) = route.map_or((None, position.unwrap_or_default()), |route| {
+                (route.focus, route.location)
+            });
             tool.motion(
                 session,
                 focus,
@@ -236,6 +239,16 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
                         },
                     );
                     tool.axis(session, axis::<B, _>(event));
+                } else {
+                    tool.motion(
+                        session,
+                        None,
+                        &tool::MotionEvent {
+                            location: Default::default(),
+                            serial: SERIAL_COUNTER.next_serial(),
+                            time: event.time(),
+                        },
+                    );
                 }
                 let serial = SERIAL_COUNTER.next_serial();
                 match event.tip_state() {

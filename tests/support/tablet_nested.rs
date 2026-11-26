@@ -11,6 +11,7 @@ pub(super) struct Observations {
     tools: usize,
     proximity: Vec<wl_surface::WlSurface>,
     pressures: Vec<u32>,
+    motions: Vec<(f64, f64)>,
     frames: usize,
     proximity_outs: usize,
     events: Vec<&'static str>,
@@ -53,7 +54,10 @@ impl Dispatch<tool::ZwpTabletToolV2, ()> for NativeState {
                 state.tablet.pressures.push(pressure);
                 state.tablet.events.push("pressure");
             }
-            tool::Event::Motion { .. } => state.tablet.events.push("motion"),
+            tool::Event::Motion { x, y } => {
+                state.tablet.events.push("motion");
+                state.tablet.motions.push((x, y));
+            }
             tool::Event::Down { .. } => state.tablet.events.push("down"),
             tool::Event::Up => state.tablet.events.push("up"),
             tool::Event::Frame { .. } => state.tablet.frames += 1,
@@ -66,9 +70,10 @@ impl Dispatch<tool::ZwpTabletToolV2, ()> for NativeState {
 #[ignore = "requires a Wayland desktop, XWayland and HALLEY_TEST_WINIT_SERVER"]
 fn tablet_pressure_and_surface_focus_are_delivered() {
     let mut fixture = Fixture::with_two_outputs(
-        "animations:\n enabled false\nend\ninput:\n tablet:\n  map-to-output \"winit-2\"\n end\nend\n",
+        "animations:\n enabled false\nend\ninput:\n tablet:\n  map-to-output \"winit\"\n end\n devices:\n  \"Test tablet 1\":\n   map-to-output \"winit-2\"\n  end\n end\nend\n",
     );
     let input = fullscreen_multi_output::Input::new(&fixture);
+    input.command("rotate-second-180");
     let (mut queue, mut client) = native_window_named(
         &fixture,
         "Tablet target",
@@ -113,14 +118,14 @@ fn tablet_pressure_and_surface_focus_are_delivered() {
         .find(|w| w["id"] == node.id)
         .unwrap();
     let rect = window["client_geometry"].as_array().unwrap();
-    let x = rect[0].as_f64().unwrap() + rect[2].as_f64().unwrap() / 2.0;
-    let y = rect[1].as_f64().unwrap() + rect[3].as_f64().unwrap() / 2.0;
+    let x = rect[0].as_f64().unwrap() + rect[2].as_f64().unwrap() * 0.3;
+    let y = rect[1].as_f64().unwrap() + rect[3].as_f64().unwrap() * 0.4;
     let output = state["outputs_geometry"]["winit-2"].as_array().unwrap();
-    let nx = (x - output[0].as_f64().unwrap()) / output[2].as_f64().unwrap();
-    let ny = (y - output[1].as_f64().unwrap()) / output[3].as_f64().unwrap();
+    let nx = 1.0 - (x - output[0].as_f64().unwrap()) / output[2].as_f64().unwrap();
+    let ny = 1.0 - (y - output[1].as_f64().unwrap()) / output[3].as_f64().unwrap();
     // Enter on the empty output corner, then move onto the client with pressure.
     // The axis must be delivered to the newly focused surface, not the old focus.
-    input.command("tablet-proximity 1 42 0.0 0.0 0.0 in");
+    input.command("tablet-proximity 1 42 1.0 1.0 0.0 in");
     input.command(&format!("tablet-axis 1 42 {nx} {ny} 0.5 in"));
     queue.roundtrip(&mut client).unwrap();
     assert_eq!(client.tablet.tools, 1);
@@ -138,6 +143,12 @@ fn tablet_pressure_and_surface_focus_are_delivered() {
         client.tablet.pressures
     );
     assert!(client.tablet.frames > 0);
+    let (mx, my) = client.tablet.motions.last().copied().unwrap();
+    assert!(
+        (mx - rect[2].as_f64().unwrap() * 0.3).abs() < 2.0
+            && (my - rect[3].as_f64().unwrap() * 0.4).abs() < 2.0,
+        "transformed surface position: {mx}, {my}"
+    );
 
     client.tablet.events.clear();
     input.command(&format!("tablet-tip 1 42 {nx} {ny} 0.75 down"));
@@ -148,13 +159,16 @@ fn tablet_pressure_and_surface_focus_are_delivered() {
         "tip down should focus the target window"
     );
     assert!((49151..=49152).contains(client.tablet.pressures.last().unwrap()));
+    client.tablet.events.clear();
     input.command(&format!("tablet-tip 1 42 {nx} {ny} 0.0 up"));
     queue.roundtrip(&mut client).unwrap();
+    assert_eq!(&client.tablet.events[..2], &["motion", "pressure"]);
+    assert!(client.tablet.events[2..].contains(&"up"));
 
     // A coordinate on the exclusive output boundary has no route. Pressure
     // must not be sent to the previously focused client in that case.
     let pressure_count = client.tablet.pressures.len();
-    input.command("tablet-axis 1 42 1.0 1.0 0.8 in");
+    input.command("tablet-axis 1 42 0.0 0.0 0.8 in");
     queue.roundtrip(&mut client).unwrap();
     assert_eq!(client.tablet.pressures.len(), pressure_count);
     assert_eq!(
@@ -296,4 +310,77 @@ fn capture_cancels_and_isolates_tablet_protocol_stream() {
 #[ignore = "requires a Wayland desktop, XWayland and HALLEY_TEST_WINIT_SERVER"]
 fn lock_cancels_and_isolates_tablet_protocol_stream() {
     isolation_scenario(true);
+}
+
+#[test]
+#[ignore = "requires a Wayland desktop, XWayland and HALLEY_TEST_WINIT_SERVER"]
+fn tablet_recovers_after_proximity_without_output_geometry() {
+    let mut fixture = Fixture::with_two_outputs("animations:\n enabled false\nend\n");
+    let input = fullscreen_multi_output::Input::new(&fixture);
+    let (mut queue, mut client) = native_window_named(
+        &fixture,
+        "Geometry target",
+        "halley.test.geometry",
+        [0, u32::MAX, 0, u32::MAX],
+    );
+    let node = fixture.node("Geometry target");
+    fullscreen_multi_output::place(&mut fixture, node.id, false);
+    let handle = queue.handle();
+    let registry = client.registry.as_ref().unwrap();
+    let wl_seat: wl_seat::WlSeat = registry.bind(client.globals["wl_seat"], 1, &handle, ());
+    let manager: manager::ZwpTabletManagerV2 =
+        registry.bind(client.globals["zwp_tablet_manager_v2"], 1, &handle, ());
+    let _seat = manager.get_tablet_seat(&wl_seat, &handle, ());
+    queue.roundtrip(&mut client).unwrap();
+    input.command("tablet-add 1");
+    let state = input.state();
+    let window = state["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == node.id)
+        .unwrap();
+    let rect = window["client_geometry"].as_array().unwrap();
+    let output = state["primary_geometry"].as_array().unwrap();
+    let nx = (rect[0].as_f64().unwrap() + rect[2].as_f64().unwrap() / 2.0
+        - output[0].as_f64().unwrap())
+        / output[2].as_f64().unwrap();
+    let ny = (rect[1].as_f64().unwrap() + rect[3].as_f64().unwrap() / 2.0
+        - output[1].as_f64().unwrap())
+        / output[3].as_f64().unwrap();
+    input.command(&format!(
+        "tablet-proximity-no-geometry 1 42 {nx} {ny} 0.5 in"
+    ));
+    input.command(&format!("tablet-axis 1 42 {nx} {ny} 0.6 in"));
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(
+        client.tablet.proximity,
+        vec![client.surface.clone().unwrap()],
+        "motion must recover without a second proximity-in"
+    );
+    assert!(!client.tablet.pressures.is_empty());
+    input.command(&format!("tablet-axis-no-geometry 1 42 {nx} {ny} 0.7 in"));
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(
+        client.tablet.proximity_outs, 1,
+        "geometry loss clears stale surface focus"
+    );
+    input.command(&format!("tablet-axis 1 42 {nx} {ny} 0.8 in"));
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(
+        client.tablet.proximity.len(),
+        2,
+        "focus returns after geometry recovery"
+    );
+    client.tablet.events.clear();
+    input.command(&format!("tablet-tip-no-geometry 1 42 {nx} {ny} 0.8 down"));
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(
+        client.tablet.proximity_outs, 2,
+        "tip without geometry must clear focus"
+    );
+    assert!(
+        !client.tablet.events.contains(&"down"),
+        "tip must not reach stale focus"
+    );
 }

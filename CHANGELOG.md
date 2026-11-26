@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
-- Add initial tablet-v2 tool routing, including pressure and focus transitions.
+- Add initial tablet-v2 tool routing, including pressure, output mapping, focus transitions, and recovery when output geometry becomes available.
   Tablet support remains experimental and is not ready for deployment.
 - Add core geometry for projecting one Field onto independent output cameras
   and checking visibility across them. The compositor still presents each

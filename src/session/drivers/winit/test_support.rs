@@ -10,7 +10,8 @@ use smithay::backend::input::{
 };
 use smithay::backend::input::{
     ProximityState, TabletToolAxisEvent, TabletToolCapabilities, TabletToolDescriptor,
-    TabletToolEvent, TabletToolProximityEvent, TabletToolType, TabletToolTipEvent, TabletToolTipState,
+    TabletToolEvent, TabletToolProximityEvent, TabletToolTipEvent, TabletToolTipState,
+    TabletToolType,
 };
 use smithay::backend::winit::WinitVirtualDevice;
 use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Subpixel};
@@ -139,7 +140,7 @@ pub(super) fn install(app: &mut App, handle: &LoopHandle<'static, App>) {
                 let event = if parts[0] == "tablet-add" { InputEvent::DeviceAdded { device } } else { InputEvent::DeviceRemoved { device } };
                 let socket_name = app.wayland_display.clone().unwrap();
                 super::super::input::handle::<_, TestInput>(app, &event, &socket_name);
-            } else if parts.first() == Some(&"tablet-proximity") || parts.first() == Some(&"tablet-axis") || parts.first() == Some(&"tablet-tip") {
+            } else if parts.first() == Some(&"tablet-proximity") || parts.first() == Some(&"tablet-axis") || parts.first() == Some(&"tablet-tip") || parts.first() == Some(&"tablet-proximity-no-geometry") || parts.first() == Some(&"tablet-axis-no-geometry") || parts.first() == Some(&"tablet-tip-no-geometry") {
                 // id tool x y pressure state; coordinates and pressure are normalized.
                 assert_eq!(parts.len(), 7);
                 let event = TestTablet {
@@ -151,8 +152,15 @@ pub(super) fn install(app: &mut App, handle: &LoopHandle<'static, App>) {
                 };
                 assert!((0.0..=1.0).contains(&event.x) && (0.0..=1.0).contains(&event.y) && (0.0..=1.0).contains(&event.pressure));
                 let socket_name = app.wayland_display.clone().unwrap();
-                let input = match parts[0] { "tablet-axis" => InputEvent::TabletToolAxis { event }, "tablet-tip" => InputEvent::TabletToolTip { event }, _ => InputEvent::TabletToolProximity { event } };
+                let input = match parts[0] { "tablet-axis" | "tablet-axis-no-geometry" => InputEvent::TabletToolAxis { event }, "tablet-tip" | "tablet-tip-no-geometry" => InputEvent::TabletToolTip { event }, _ => InputEvent::TabletToolProximity { event } };
+                let no_geometry = parts[0].ends_with("-no-geometry");
+                if no_geometry { app.wayland.space.unmap_output(&primary); }
                 super::super::input::handle::<_, TestInput>(app, &input, &socket_name);
+                if no_geometry { app.wayland.space.map_output(&primary, primary.current_location()); }
+            } else if parts.first() == Some(&"rotate-second-180") {
+                let output = app.driver.extra_outputs[0].clone();
+                output.change_current_state(None, Some(smithay::utils::Transform::_180), None, None);
+                app.wayland.space.map_output(&output, output.current_location());
             } else if parts.first() == Some(&"layout") {
                 use crate::session::state::OutputDriver;
                 assert_eq!(parts.len(), 5);
@@ -496,6 +504,9 @@ impl TabletToolProximityEvent<TestInput> for TestTablet {
 
 impl TabletToolTipEvent<TestInput> for TestTablet {
     fn tip_state(&self) -> TabletToolTipState {
-        match self.proximity { ProximityState::In => TabletToolTipState::Down, ProximityState::Out => TabletToolTipState::Up }
+        match self.proximity {
+            ProximityState::In => TabletToolTipState::Down,
+            ProximityState::Out => TabletToolTipState::Up,
+        }
     }
 }
