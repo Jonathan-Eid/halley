@@ -303,6 +303,7 @@ impl<D: SessionDriver> Session<D> {
         super::cancel_compositor_grab(self);
         super::gesture::cancel_all(self);
         super::touch::cancel_all(self);
+        super::tablet::cancel_all(self);
         self.request_redraw();
     }
 
@@ -330,6 +331,7 @@ impl<D: SessionDriver> Session<D> {
         super::cancel_compositor_grab(self);
         super::gesture::cancel_all(self);
         super::touch::cancel_all(self);
+        super::tablet::cancel_all(self);
         self.request_redraw();
     }
 

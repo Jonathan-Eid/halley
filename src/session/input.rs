@@ -1048,10 +1048,13 @@ where
     {
         return;
     }
+    if super::tablet::handle(session, event) {
+        return;
+    }
     if modal::intercept_early(session, event) {
         return;
     }
-    if super::tablet::handle(session, event) || super::touch::handle(session, event) || super::gesture::handle(session, event) {
+    if super::touch::handle(session, event) || super::gesture::handle(session, event) {
         return;
     }
     let position_before = session.pointer.position();

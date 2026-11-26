@@ -99,6 +99,11 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
     session: &mut Session<D>,
     event: &InputEvent<B>,
 ) -> bool {
+    if (session.capture.is_active() || session.shell.overlays.confirmation_modal_active())
+        && matches!(event, InputEvent::TabletToolProximity { .. } | InputEvent::TabletToolAxis { .. } | InputEvent::TabletToolTip { .. } | InputEvent::TabletToolButton { .. })
+    {
+        return true;
+    }
     let seat = session.seat.tablet_seat();
     match event {
         InputEvent::TabletToolProximity { event } => {

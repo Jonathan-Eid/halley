@@ -43,4 +43,22 @@ mod tests {
         assert!(!state.contains(&1));
         assert!(state.cancel_all().is_empty());
     }
+    #[test]
+    fn capture_and_confirmation_install_tablet_isolation() {
+        let capture = include_str!("../../capture/mod.rs");
+        let state = include_str!("../state.rs");
+        let input = include_str!("../input.rs");
+        let begin_capture = capture.split("fn begin_modal_capture<").nth(1).unwrap().split("fn finish_modal_capture<").next().unwrap();
+        assert!(begin_capture.contains("tablet::cancel_all(session)"), "capture entry must cancel existing tablet strokes");
+        for name in ["request_cluster_dissolution", "show_exit_confirmation"] {
+            let method = state.split(&format!("fn {name}(")).nth(1).unwrap().split("\n    }").next().unwrap();
+            assert!(method.contains("tablet::cancel_all(self)"), "{name} must cancel existing tablet strokes");
+        }
+        let tablet = input.find("super::tablet::handle(session, event)").unwrap();
+        let modal = input.find("modal::intercept_early(session, event)").unwrap();
+        assert!(tablet < modal, "tablet isolation must run before modal interception");
+        assert!(include_str!("tablet.rs").contains("session.capture.is_active()"), "capture must suppress tablet input");
+        assert!(include_str!("tablet.rs").contains("confirmation_modal_active()"), "confirmations must suppress tablet input");
+    }
+
 }
