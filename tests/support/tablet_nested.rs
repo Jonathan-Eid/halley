@@ -13,6 +13,7 @@ pub(super) struct Observations {
     pressures: Vec<u32>,
     frames: usize,
     proximity_outs: usize,
+    events: Vec<&'static str>,
 }
 delegate_noop!(NativeState: ignore manager::ZwpTabletManagerV2);
 impl Dispatch<seat::ZwpTabletSeatV2, ()> for NativeState {
@@ -48,7 +49,13 @@ impl Dispatch<tool::ZwpTabletToolV2, ()> for NativeState {
         match event {
             tool::Event::ProximityIn { surface, .. } => state.tablet.proximity.push(surface),
             tool::Event::ProximityOut => state.tablet.proximity_outs += 1,
-            tool::Event::Pressure { pressure } => state.tablet.pressures.push(pressure),
+            tool::Event::Pressure { pressure } => {
+                state.tablet.pressures.push(pressure);
+                state.tablet.events.push("pressure");
+            }
+            tool::Event::Motion { .. } => state.tablet.events.push("motion"),
+            tool::Event::Down { .. } => state.tablet.events.push("down"),
+            tool::Event::Up => state.tablet.events.push("up"),
             tool::Event::Frame { .. } => state.tablet.frames += 1,
             _ => {}
         }
@@ -59,7 +66,7 @@ impl Dispatch<tool::ZwpTabletToolV2, ()> for NativeState {
 #[ignore = "requires a Wayland desktop, XWayland and HALLEY_TEST_WINIT_SERVER"]
 fn tablet_pressure_and_surface_focus_are_delivered() {
     let mut fixture = Fixture::with_two_outputs(
-        "animations:\n enabled false\nend\ninput:\n touchscreen:\n  map-to-output \"winit-2\"\n end\nend\n",
+        "animations:\n enabled false\nend\ninput:\n tablet:\n  map-to-output \"winit-2\"\n end\nend\n",
     );
     let input = fullscreen_multi_output::Input::new(&fixture);
     let (mut queue, mut client) = native_window_named(
@@ -69,7 +76,21 @@ fn tablet_pressure_and_surface_focus_are_delivered() {
         [0, u32::MAX, 0, u32::MAX],
     );
     let node = fixture.node("Tablet target");
-    fullscreen_multi_output::place(&mut fixture, node.id, false);
+    fullscreen_multi_output::place(&mut fixture, node.id, true);
+    let _keyboard = observe_keyboard(&mut queue, &mut client);
+    let (_other_queue, _other) = native_window_named(
+        &fixture,
+        "Other window",
+        "halley.test.other",
+        [0, u32::MAX, 0, u32::MAX],
+    );
+    let other_node = fixture.node("Other window");
+    fullscreen_multi_output::place(&mut fixture, other_node.id, false);
+    queue.roundtrip(&mut client).unwrap();
+    assert!(
+        !client.keyboard_focused,
+        "other window must have focus before pen down"
+    );
     let handle = queue.handle();
     let registry = client.registry.as_ref().unwrap();
     let wl_seat: wl_seat::WlSeat = registry.bind(client.globals["wl_seat"], 1, &handle, ());
@@ -83,7 +104,7 @@ fn tablet_pressure_and_surface_focus_are_delivered() {
         client.tablet.tablets, 1,
         "device addition must announce a tablet"
     );
-    // Center of the presented content, converted to normalized primary-output coordinates.
+    // Center of the presented content, converted to normalized configured-output coordinates.
     let state = input.state();
     let window = state["windows"]
         .as_array()
@@ -91,10 +112,10 @@ fn tablet_pressure_and_surface_focus_are_delivered() {
         .iter()
         .find(|w| w["id"] == node.id)
         .unwrap();
-    let rect = window["rect"].as_array().unwrap();
+    let rect = window["client_geometry"].as_array().unwrap();
     let x = rect[0].as_f64().unwrap() + rect[2].as_f64().unwrap() / 2.0;
     let y = rect[1].as_f64().unwrap() + rect[3].as_f64().unwrap() / 2.0;
-    let output = state["primary_geometry"].as_array().unwrap();
+    let output = state["outputs_geometry"]["winit-2"].as_array().unwrap();
     let nx = (x - output[0].as_f64().unwrap()) / output[2].as_f64().unwrap();
     let ny = (y - output[1].as_f64().unwrap()) / output[3].as_f64().unwrap();
     // Enter on the empty output corner, then move onto the client with pressure.
@@ -117,6 +138,18 @@ fn tablet_pressure_and_surface_focus_are_delivered() {
         client.tablet.pressures
     );
     assert!(client.tablet.frames > 0);
+
+    client.tablet.events.clear();
+    input.command(&format!("tablet-tip 1 42 {nx} {ny} 0.75 down"));
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(client.tablet.events, vec!["motion", "pressure", "down"]);
+    assert!(
+        client.keyboard_focused,
+        "tip down should focus the target window"
+    );
+    assert!((49151..=49152).contains(client.tablet.pressures.last().unwrap()));
+    input.command(&format!("tablet-tip 1 42 {nx} {ny} 0.0 up"));
+    queue.roundtrip(&mut client).unwrap();
 
     // A coordinate on the exclusive output boundary has no route. Pressure
     // must not be sent to the previously focused client in that case.

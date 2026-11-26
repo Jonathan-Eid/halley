@@ -58,6 +58,7 @@ pub struct Input {
     pub trackpoint: DeviceSettings,
     pub trackball: DeviceSettings,
     pub touchscreen: DeviceSettings,
+    pub tablet: DeviceSettings,
     pub devices: Vec<DeviceOverride>,
 }
 
@@ -75,6 +76,7 @@ impl Default for Input {
             trackpoint: DeviceSettings::default(),
             trackball: DeviceSettings::default(),
             touchscreen: DeviceSettings::default(),
+            tablet: DeviceSettings::default(),
             devices: Vec::new(),
         }
     }
@@ -88,6 +90,7 @@ impl Input {
             DeviceKind::Trackpoint => &self.trackpoint,
             DeviceKind::Trackball => &self.trackball,
             DeviceKind::Touchscreen => &self.touchscreen,
+            DeviceKind::Tablet => &self.tablet,
         };
         self.devices
             .iter()
@@ -135,6 +138,7 @@ pub fn parse_input(config: &RuneConfig) -> Result<Input, InputParseError> {
             "trackpoint",
             "trackball",
             "touchscreen",
+            "tablet",
             "devices",
         ],
         "input",
@@ -187,6 +191,7 @@ pub fn parse_input(config: &RuneConfig) -> Result<Input, InputParseError> {
     let trackpoint = parse_device_section(input_fields, "trackpoint", DeviceKind::Trackpoint)?;
     let trackball = parse_device_section(input_fields, "trackball", DeviceKind::Trackball)?;
     let touchscreen = parse_device_section(input_fields, "touchscreen", DeviceKind::Touchscreen)?;
+    let tablet = parse_device_section(input_fields, "tablet", DeviceKind::Tablet)?;
     let devices = match field(input_fields, "devices") {
         Some(value) => parse_devices(object(value, "input.devices")?)?,
         None => Vec::new(),
@@ -204,6 +209,7 @@ pub fn parse_input(config: &RuneConfig) -> Result<Input, InputParseError> {
         trackpoint,
         trackball,
         touchscreen,
+        tablet,
         devices,
     })
 }
@@ -601,6 +607,7 @@ fn parse_device_settings(
     let allowed = match kind {
         Some(DeviceKind::Touchpad) => TOUCHPAD_FIELDS,
         Some(DeviceKind::Touchscreen) => TOUCHSCREEN_FIELDS,
+        Some(DeviceKind::Tablet) => &["map-to-output"],
         Some(DeviceKind::Mouse | DeviceKind::Trackpoint | DeviceKind::Trackball) => POINTER_FIELDS,
         None => ALL_FIELDS,
     };
@@ -958,6 +965,19 @@ end
             input.touchscreen.calibration_matrix,
             Some([1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
         );
+    }
+
+    #[test]
+    fn tablet_mapping_is_independent_of_touchscreen() {
+        let input = parse("input:\n tablet:\n  map-to-output \"eDP-1\"\n end\n touchscreen:\n  map-to-output \"DP-1\"\n end\nend\n").unwrap();
+        assert_eq!(
+            input
+                .settings_for_device(DeviceKind::Tablet, "pen")
+                .map_to_output
+                .as_deref(),
+            Some("eDP-1")
+        );
+        assert_eq!(input.touchscreen.map_to_output.as_deref(), Some("DP-1"));
     }
 
     #[test]

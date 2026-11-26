@@ -10,7 +10,7 @@ use smithay::backend::input::{
 };
 use smithay::backend::input::{
     ProximityState, TabletToolAxisEvent, TabletToolCapabilities, TabletToolDescriptor,
-    TabletToolEvent, TabletToolProximityEvent, TabletToolType,
+    TabletToolEvent, TabletToolProximityEvent, TabletToolType, TabletToolTipEvent, TabletToolTipState,
 };
 use smithay::backend::winit::WinitVirtualDevice;
 use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Subpixel};
@@ -139,19 +139,19 @@ pub(super) fn install(app: &mut App, handle: &LoopHandle<'static, App>) {
                 let event = if parts[0] == "tablet-add" { InputEvent::DeviceAdded { device } } else { InputEvent::DeviceRemoved { device } };
                 let socket_name = app.wayland_display.clone().unwrap();
                 super::super::input::handle::<_, TestInput>(app, &event, &socket_name);
-            } else if parts.first() == Some(&"tablet-proximity") || parts.first() == Some(&"tablet-axis") {
+            } else if parts.first() == Some(&"tablet-proximity") || parts.first() == Some(&"tablet-axis") || parts.first() == Some(&"tablet-tip") {
                 // id tool x y pressure state; coordinates and pressure are normalized.
                 assert_eq!(parts.len(), 7);
                 let event = TestTablet {
                     device: parts[1].parse().unwrap(), tool: parts[2].parse().unwrap(),
                     x: parts[3].parse().unwrap(), y: parts[4].parse().unwrap(),
                     pressure: parts[5].parse().unwrap(),
-                    proximity: match parts[6] { "in" => ProximityState::In, "out" => ProximityState::Out, _ => panic!("invalid proximity") },
+                    proximity: match parts[6] { "in" | "down" => ProximityState::In, "out" | "up" => ProximityState::Out, _ => panic!("invalid state") },
                     time: app.start_time.elapsed().as_millis() as u32,
                 };
                 assert!((0.0..=1.0).contains(&event.x) && (0.0..=1.0).contains(&event.y) && (0.0..=1.0).contains(&event.pressure));
                 let socket_name = app.wayland_display.clone().unwrap();
-                let input = if parts[0] == "tablet-axis" { InputEvent::TabletToolAxis { event } } else { InputEvent::TabletToolProximity { event } };
+                let input = match parts[0] { "tablet-axis" => InputEvent::TabletToolAxis { event }, "tablet-tip" => InputEvent::TabletToolTip { event }, _ => InputEvent::TabletToolProximity { event } };
                 super::super::input::handle::<_, TestInput>(app, &input, &socket_name);
             } else if parts.first() == Some(&"layout") {
                 use crate::session::state::OutputDriver;
@@ -201,7 +201,7 @@ pub(super) fn install(app: &mut App, handle: &LoopHandle<'static, App>) {
                 _ => None,
             };
             let primary_geometry = app.wayland.space.output_geometry(&primary).unwrap();
-            let reply = serde_json::json!({"primary_geometry": [primary_geometry.loc.x, primary_geometry.loc.y, primary_geometry.size.w, primary_geometry.size.h], "layout_error": layout_error, "open": app.shell.focus_cycle.is_open(), "active": app.shell.focus_cycle.is_active(),
+            let reply = serde_json::json!({"outputs_geometry": app.wayland.space.outputs().filter_map(|o| app.wayland.space.output_geometry(o).map(|g| (o.name(), [g.loc.x, g.loc.y, g.size.w, g.size.h]))).collect::<std::collections::HashMap<_, _>>(), "primary_geometry": [primary_geometry.loc.x, primary_geometry.loc.y, primary_geometry.size.w, primary_geometry.size.h], "layout_error": layout_error, "open": app.shell.focus_cycle.is_open(), "active": app.shell.focus_cycle.is_active(),
                 "empty_cluster": app.wayland.space.outputs().filter_map(|output| {
                     let snapshot = app.shell.overlays.snapshot(&output.name(), now).empty_cluster?;
                     Some(serde_json::json!({"output": output.name(), "shortcut": snapshot.shortcut, "armed": snapshot.armed}))
@@ -355,7 +355,7 @@ impl InputBackend for TestInput {
     type TouchFrameEvent = UnusedEvent;
     type TabletToolAxisEvent = TestTablet;
     type TabletToolProximityEvent = TestTablet;
-    type TabletToolTipEvent = UnusedEvent;
+    type TabletToolTipEvent = TestTablet;
     type TabletToolButtonEvent = UnusedEvent;
     type SwitchToggleEvent = UnusedEvent;
     type SpecialEvent = UnusedEvent;
@@ -491,5 +491,11 @@ impl TabletToolAxisEvent<TestInput> for TestTablet {}
 impl TabletToolProximityEvent<TestInput> for TestTablet {
     fn state(&self) -> ProximityState {
         self.proximity
+    }
+}
+
+impl TabletToolTipEvent<TestInput> for TestTablet {
+    fn tip_state(&self) -> TabletToolTipState {
+        match self.proximity { ProximityState::In => TabletToolTipState::Down, ProximityState::Out => TabletToolTipState::Up }
     }
 }

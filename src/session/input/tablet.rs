@@ -74,7 +74,15 @@ where
     B: InputBackend,
     E: smithay::backend::input::AbsolutePositionEvent<B>,
 {
-    let output = session.driver.primary_output();
+    let settings = session
+        .settings
+        .input
+        .settings_for_device(halley_config::DeviceKind::Tablet, &event.device().name());
+    let output = settings
+        .map_to_output
+        .as_deref()
+        .and_then(|name| session.wayland.space.outputs().find(|o| o.name() == name))
+        .unwrap_or_else(|| session.driver.primary_output());
     super::touch::transform_absolute_position(
         event,
         output,
@@ -100,7 +108,13 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
     event: &InputEvent<B>,
 ) -> bool {
     if (session.capture.is_active() || session.shell.overlays.confirmation_modal_active())
-        && matches!(event, InputEvent::TabletToolProximity { .. } | InputEvent::TabletToolAxis { .. } | InputEvent::TabletToolTip { .. } | InputEvent::TabletToolButton { .. })
+        && matches!(
+            event,
+            InputEvent::TabletToolProximity { .. }
+                | InputEvent::TabletToolAxis { .. }
+                | InputEvent::TabletToolTip { .. }
+                | InputEvent::TabletToolButton { .. }
+        )
     {
         return true;
     }
@@ -187,6 +201,42 @@ pub(super) fn handle<D: SessionDriver, B: InputBackend>(
                 return true;
             }
             if let Some(tool) = seat.get_tool(&descriptor) {
+                if let Some(position) = tablet_position::<D, B, _>(session, event) {
+                    let route = super::touch::route(session, position);
+                    if matches!(event.tip_state(), TabletToolTipState::Down) {
+                        if let Some(route) = &route {
+                            crate::wayland::focus::select_output(
+                                &mut session.wayland,
+                                &route.output,
+                            );
+                            let serial = SERIAL_COUNTER.next_serial();
+                            match &route.target {
+                                crate::input::pointer::PointerTarget::Window(window)
+                                | crate::input::pointer::PointerTarget::Decoration {
+                                    window, ..
+                                } => {
+                                    super::focus::focus_window_from_pointer(session, window, serial)
+                                }
+                                crate::input::pointer::PointerTarget::Layer(layer) => {
+                                    super::focus::focus_layer(session, Some(layer.clone()), serial)
+                                }
+                                crate::input::pointer::PointerTarget::Background => {}
+                            }
+                        }
+                    }
+                    let (focus, location) =
+                        route.map_or((None, position), |route| (route.focus, route.location));
+                    tool.motion(
+                        session,
+                        focus,
+                        &tool::MotionEvent {
+                            location,
+                            serial: SERIAL_COUNTER.next_serial(),
+                            time: event.time(),
+                        },
+                    );
+                    tool.axis(session, axis::<B, _>(event));
+                }
                 let serial = SERIAL_COUNTER.next_serial();
                 match event.tip_state() {
                     TabletToolTipState::Down => tool.down(

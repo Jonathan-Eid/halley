@@ -31,6 +31,7 @@ pub enum DeviceKind {
     Trackpoint,
     Trackball,
     Touchscreen,
+    Tablet,
 }
 
 /// Optional settings shared by device-class defaults and exact-name

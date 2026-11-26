@@ -76,6 +76,7 @@ pub(super) fn apply(
         | DeviceKind::Touchpad
         | DeviceKind::Trackpoint
         | DeviceKind::Trackball => apply_pointer(device, kind, &name, defaults, &configured),
+        DeviceKind::Tablet => {}
         DeviceKind::Touchscreen => {
             let matrix = configured
                 .calibration_matrix
