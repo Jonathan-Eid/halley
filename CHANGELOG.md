@@ -5,6 +5,8 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Add initial tablet-v2 tool routing, including pressure and focus transitions.
+  Tablet support remains experimental and is not ready for deployment.
 - Add core geometry for projecting one Field onto independent output cameras
   and checking visibility across them. The compositor still presents each
   window on its assigned monitor.

@@ -12,6 +12,7 @@ pub(super) struct Observations {
     proximity: Vec<wl_surface::WlSurface>,
     pressures: Vec<u32>,
     frames: usize,
+    proximity_outs: usize,
 }
 delegate_noop!(NativeState: ignore manager::ZwpTabletManagerV2);
 impl Dispatch<seat::ZwpTabletSeatV2, ()> for NativeState {
@@ -46,6 +47,7 @@ impl Dispatch<tool::ZwpTabletToolV2, ()> for NativeState {
     ) {
         match event {
             tool::Event::ProximityIn { surface, .. } => state.tablet.proximity.push(surface),
+            tool::Event::ProximityOut => state.tablet.proximity_outs += 1,
             tool::Event::Pressure { pressure } => state.tablet.pressures.push(pressure),
             tool::Event::Frame { .. } => state.tablet.frames += 1,
             _ => {}
@@ -56,7 +58,9 @@ impl Dispatch<tool::ZwpTabletToolV2, ()> for NativeState {
 #[test]
 #[ignore = "requires a Wayland desktop, XWayland and HALLEY_TEST_WINIT_SERVER"]
 fn tablet_pressure_and_surface_focus_are_delivered() {
-    let mut fixture = Fixture::with_two_outputs("animations:\n enabled false\nend\ninput:\n touchscreen:\n  map-to-output \"winit-2\"\n end\nend\n");
+    let mut fixture = Fixture::with_two_outputs(
+        "animations:\n enabled false\nend\ninput:\n touchscreen:\n  map-to-output \"winit-2\"\n end\nend\n",
+    );
     let input = fullscreen_multi_output::Input::new(&fixture);
     let (mut queue, mut client) = native_window_named(
         &fixture,
@@ -113,4 +117,15 @@ fn tablet_pressure_and_surface_focus_are_delivered() {
         client.tablet.pressures
     );
     assert!(client.tablet.frames > 0);
+
+    // A coordinate on the exclusive output boundary has no route. Pressure
+    // must not be sent to the previously focused client in that case.
+    let pressure_count = client.tablet.pressures.len();
+    input.command("tablet-axis 1 42 1.0 1.0 0.8 in");
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(client.tablet.pressures.len(), pressure_count);
+    assert_eq!(
+        client.tablet.proximity_outs, 1,
+        "route loss must clear client focus"
+    );
 }
